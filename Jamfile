@@ -1,0 +1,25 @@
+import modules ;
+
+BOOST_ROOT = [ modules.peek : BOOST_ROOT ] ;
+
+ECHO "BOOST_ROOT =" $(BOOST_ROOT) ;
+
+if $(BOOST_ROOT)
+{
+	use-project /boost : $(BOOST_ROOT) ;
+}
+
+exe dht-bootstrap
+
+	: # sources
+	main.cpp lazy_bdecode.cpp
+
+	: # requirements
+	<threading>multi
+	<library>/boost/system
+	: # default build
+	<link>static
+	<threading>multi
+	: # usage requirements
+	;
+
