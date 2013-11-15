@@ -36,6 +36,8 @@ def scrape_dht_nodes(query, nodelist):
 		msg['a']['target'] = random_key()
 	elif query == 'get_peers':
 		msg['a']['info-hash'] = random_key()
+	elif query == 'ping':
+		pass
 	else:
 		print 'ERROR: invalid query "%s"' % query
 		return []
@@ -139,8 +141,9 @@ for i in xrange(500):
 		nodes += r[0]
 		response_ip.append(r[2])
 		live_nodes.append(r[2])
-		if r[1] in clients: clients[r[1]] += 1
-		else: clients[r[1]] = 0
+		c = r[1][:2]
+		if c in clients: clients[c] += 1
+		else: clients[c] = 0
 
 	print '<-- responses: %d timeouts: %d ips: ' % (len(responses), num_pings - len(responses)),
 	total_response += len(responses)
