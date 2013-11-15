@@ -31,6 +31,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <unordered_set>
 
 #include <boost/uuid/sha1.hpp>
+#include <boost/crc.hpp>
 #include <boost/system/error_code.hpp>
 #include <boost/bind.hpp>
 #include "lazy_entry.hpp"
@@ -40,6 +41,7 @@ using boost::asio::signal_set;
 using boost::asio::io_service;
 using boost::asio::ip::udp;
 using boost::asio::ip::address_v4;
+using boost::asio::ip::address;
 using boost::system::error_code;
 using boost::asio::buffer;
 using std::chrono::steady_clock;
@@ -258,13 +260,68 @@ std::string compute_tid(char const* secret, char const* remote_ip, char const* n
 	return ret;
 }
 
-bool verify_tid(std::string tid, char const* secret1, char const* secret2, char const* remote_ip, char const* node_id)
+bool verify_tid(std::string tid, char const* secret1, char const* secret2
+	, char const* remote_ip, char const* node_id)
 {
 	// we use 6 byte transaction IDs
 	if (tid.size() != 6) return false;
 
 	return compute_tid(secret1, remote_ip, node_id) == tid
 		|| compute_tid(secret2, remote_ip, node_id) == tid;
+}
+
+void generate_id(address const& ip_, boost::uint32_t r, char* id)
+{
+	boost::uint8_t* ip = 0;
+	
+	const static boost::uint8_t v4mask[] = { 0x01, 0x07, 0x1f, 0x7f };
+	boost::uint8_t const* mask = 0;
+	int num_octets = 0;
+
+	address_v4::bytes_type b4;
+	{
+		b4 = ip_.to_v4().to_bytes();
+		ip = &b4[0];
+		num_octets = 4;
+		mask = v4mask;
+	}
+
+	for (int i = 0; i < num_octets; ++i)
+		ip[i] &= mask[i];
+
+	boost::uint8_t rand = r & 0x7;
+
+	boost::crc_32_type crc;
+	crc.process_block(ip, ip + num_octets);
+	crc.process_byte(rand);
+	boost::uint32_t c = crc.checksum();
+
+	id[0] = (c >> 24) & 0xff;
+	id[1] = (c >> 16) & 0xff;
+	id[2] = (c >> 8) & 0xff;
+	id[3] = c & 0xff;
+
+	for (int i = 4; i < 19; ++i) id[i] = std::rand();
+	id[19] = r;
+}
+
+// determines if an IP is valid to be pinged for
+// possible inclusion in our node list
+bool is_valid_ip(udp::endpoint const& ep)
+{
+	if (ep.port() == 0) return false;
+	if (!ep.address().is_v4()) return false;
+
+	address_v4 const& addr = ep.address().to_v4();
+	unsigned long ip = addr.to_ulong();
+	if ((ip & 0xff000000) == 0x0a000000 // 10.x.x.x
+		|| (ip & 0xfff00000) == 0xac100000 // 172.16.x.x
+		|| (ip & 0xffff0000) == 0xc0a80000 // 192.168.x.x
+		|| (ip & 0xffff0000) == 0xa9fe0000 // 169.254.x.x
+		|| (ip & 0xff000000) == 0x7f000000) // 127.x.x.x
+		return false;
+
+	return true;
 }
 
 void router_thread(int threadid, udp::socket& sock)
@@ -346,7 +403,8 @@ void router_thread(int threadid, udp::socket& sock)
 		if (ec)
 		{
 			if (ec == boost::system::errc::interrupted) continue;
-			if (ec == boost::system::errc::bad_file_descriptor)
+			if (ec == boost::system::errc::bad_file_descriptor
+				|| ec == boost::asio::error::operation_aborted)
 			{
 				printf("stopping thread %d\n", threadid);
 				return;
@@ -384,8 +442,6 @@ void router_thread(int threadid, udp::socket& sock)
 		lazy_entry const* node_id = a->dict_find_string("id");
 		if (!node_id || node_id->string_length() != 20) continue;
 
-		// TODO: verify if the node ID is valid for the source IP
-
 		// build the IP response buffer, with the source
 		// IP and port that we observe from this node
 		char remote_ip[6];
@@ -404,9 +460,16 @@ void router_thread(int threadid, udp::socket& sock)
 			if (!verify_tid(transaction_id, secret1, secret2, remote_ip, node_id->string_ptr()))
 				continue;
 
+			// this shouldn't really happen
+			if (!is_valid_ip(ep))
+				continue;
+
 			fprintf(stderr, "got ping response\n");
 
-			// TODO: verify the node ID matches the IP
+			// verify that the node ID is valid for the source IP
+			char h[20];
+			generate_id(ep.address(), node_id->string_ptr()[19], h);
+			if (memcmp(node_id->string_ptr(), &h[0], 4) != 0) continue;
 
 			node_buffer.insert_node(ep, node_id->string_ptr());
 		}
@@ -425,12 +488,14 @@ void router_thread(int threadid, udp::socket& sock)
 			b.add_string("id");
 			b.add_string(our_node_id, 20);
 
+			// This is here for backwards compatibility
+			b.add_string("ip");
+			b.add_string(remote_ip, 4);
+
 			if (cmd == "find_node")
 			{
 				// if we don't have any nodes, don't respond. We will have nodes
 				// soon. Try to make the requestor come back in a bit
-				if (node_buffer.empty()) continue;
-
 				b.add_string("values");
 				b.add_string(node_buffer.get_nodes());
 			}
@@ -450,12 +515,18 @@ void router_thread(int threadid, udp::socket& sock)
 			else if (len <= 0)
 				fprintf(stderr, "send_to failed: return=%d\n", len);
 
-			// TODO: verify the node ID matches the IP
+			// verify that the node ID is valid for the source IP
+			char h[20];
+			generate_id(ep.address(), node_id->string_ptr()[19], h);
+			if (memcmp(node_id->string_ptr(), &h[0], 4) != 0) continue;
 
-			// TODO: filter obvious invalid IPs
-
-			// ping this node later, we may want to add it to our node buffer
-			ping_queue.insert_node(ep, node_id->string_ptr());
+			// filter obvious invalid IPs, and IPv6 (since we only support
+			// IPv4 for now)
+			if (is_valid_ip(ep))
+			{
+				// ping this node later, we may want to add it to our node buffer
+				ping_queue.insert_node(ep, node_id->string_ptr());
+			}
 		}
 	}
 }
@@ -468,14 +539,33 @@ void shutdown(udp::socket& s)
 		fprintf(stderr, "socket: (%d) %s\n", ec.value(), ec.message().c_str());
 }
 
-int main()
+void print_usage()
+{
+	fprintf(stderr, "usage: dht-bootstrap <external-IP>\n");
+}
+
+int main(int argc, char* argv[])
 {
 	static_assert(sizeof(node_entry_t) == 26, "node_entry_t may not contain padding");
+
+	if (argc != 2)
+	{
+		print_usage();
+		return 1;
+	}
+
+	error_code ec;
+	address_v4 our_external_ip = address_v4::from_string(argv[1], ec);
+	if (ec)
+	{
+		fprintf(stderr, "invalid external IP address specified: %s\n"
+			, ec.message().c_str());
+		return 1;
+	}
 
 	io_service ios;
 	udp::socket sock(ios);
 
-	error_code ec;
 	sock.open(udp::v4(), ec);
 	if (ec)
 	{
@@ -490,9 +580,14 @@ int main()
 		return 1;
 	}
 	
-	// TODO: set send and receive buffers relatively large
+	// set send and receive buffers relatively large
+	boost::asio::socket_base::receive_buffer_size recv_size(512 * 1024);
+	sock.set_option(recv_size);
+	boost::asio::socket_base::send_buffer_size send_size(512 * 1024);
+	sock.set_option(send_size);
 
-	// TODO: initialize our_node_id
+	// initialize our_node_id
+	generate_id(our_external_ip, std::rand(), our_node_id);
 
 	// listen on signals to be able to shut down
 	signal_set signals(ios);
