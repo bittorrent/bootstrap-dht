@@ -241,7 +241,8 @@ private:
 char our_node_id[20];
 
 
-std::string compute_tid(char const* secret, char const* remote_ip, char const* node_id)
+std::string compute_tid(char const* secret, char const* remote_ip
+	, char const* node_id)
 {
 	sha1 ctx;
 	ctx.process_bytes(secret, 20);
@@ -295,6 +296,48 @@ void generate_id(address const& ip_, boost::uint32_t r, char* id)
 	crc.process_block(ip, ip + num_octets);
 	crc.process_byte(rand);
 	boost::uint32_t c = crc.checksum();
+
+	id[0] = (c >> 24) & 0xff;
+	id[1] = (c >> 16) & 0xff;
+	id[2] = (c >> 8) & 0xff;
+	id[3] = c & 0xff;
+
+	for (int i = 4; i < 19; ++i) id[i] = std::rand();
+	id[19] = r;
+}
+
+// this is here for backwards compatibility with the first version
+// of the node ID scheme, which uses sha1 instead of crc32
+void generate_id_sha1(address const& ip_, boost::uint32_t r, char* id)
+{
+	boost::uint8_t* ip = 0;
+	
+	const static boost::uint8_t v4mask[] = { 0x01, 0x07, 0x1f, 0x7f };
+	boost::uint8_t const* mask = 0;
+	int num_octets = 0;
+
+	address_v4::bytes_type b4;
+	{
+		b4 = ip_.to_v4().to_bytes();
+		ip = &b4[0];
+		num_octets = 4;
+		mask = v4mask;
+	}
+
+	for (int i = 0; i < num_octets; ++i)
+		ip[i] &= mask[i];
+
+	boost::uint8_t rand = r & 0x7;
+
+	// boost's sha1 returns uint32_t's in
+	// host endian. We need to turn it into
+	// big endian.
+	sha1 ctx;
+	ctx.process_bytes(ip, num_octets);
+	ctx.process_byte(rand);
+	uint32_t d[5];
+	ctx.get_digest(d);
+	boost::uint32_t c = htonl(d[0]);
 
 	id[0] = (c >> 24) & 0xff;
 	id[1] = (c >> 16) & 0xff;
@@ -469,7 +512,12 @@ void router_thread(int threadid, udp::socket& sock)
 			// verify that the node ID is valid for the source IP
 			char h[20];
 			generate_id(ep.address(), node_id->string_ptr()[19], h);
-			if (memcmp(node_id->string_ptr(), &h[0], 4) != 0) continue;
+			if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+			{
+				generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
+				if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+					continue;
+			}
 
 			node_buffer.insert_node(ep, node_id->string_ptr());
 		}
@@ -518,7 +566,12 @@ void router_thread(int threadid, udp::socket& sock)
 			// verify that the node ID is valid for the source IP
 			char h[20];
 			generate_id(ep.address(), node_id->string_ptr()[19], h);
-			if (memcmp(node_id->string_ptr(), &h[0], 4) != 0) continue;
+			if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+			{
+				generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
+				if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+					continue;
+			}
 
 			// filter obvious invalid IPs, and IPv6 (since we only support
 			// IPv4 for now)
