@@ -521,7 +521,10 @@ void router_thread(int threadid, udp::socket& sock)
 
 			node_buffer.insert_node(ep, node_id->string_ptr());
 		}
-		else if (cmd == "ping" || cmd == "find_node")
+		else if (cmd == "ping"
+			|| cmd == "find_node"
+			|| cmd == "get_peers"
+			|| cmd == "get")
 		{
 
 			bencoder b(response, sizeof(response));
@@ -540,10 +543,8 @@ void router_thread(int threadid, udp::socket& sock)
 			b.add_string("ip");
 			b.add_string(remote_ip, 4);
 
-			if (cmd == "find_node")
+			if (cmd != "ping")
 			{
-				// if we don't have any nodes, don't respond. We will have nodes
-				// soon. Try to make the requestor come back in a bit
 				b.add_string("values");
 				b.add_string(node_buffer.get_nodes());
 			}
