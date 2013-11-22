@@ -32,6 +32,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "lazy_entry.hpp"
 #include <cstring>
+#define __STDC_FORMAT_MACROS
 #include <inttypes.h>
 
 namespace
