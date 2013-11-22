@@ -29,11 +29,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <type_traits>
 #include <random>
 #include <unordered_set>
+#include <atomic>
 
 #include <boost/uuid/sha1.hpp>
 #include <boost/crc.hpp>
 #include <boost/system/error_code.hpp>
-#include <boost/bind.hpp>
 #include "lazy_entry.hpp"
 #include "bencode.hpp"
 
@@ -42,12 +42,14 @@ using boost::asio::io_service;
 using boost::asio::ip::udp;
 using boost::asio::ip::address_v4;
 using boost::asio::ip::address;
+using boost::asio::deadline_timer;
 using boost::system::error_code;
 using boost::asio::buffer;
 using std::chrono::steady_clock;
 using std::chrono::minutes;
 using std::chrono::seconds;
 using boost::uuids::detail::sha1;
+using namespace std::placeholders;
 
 typedef steady_clock::time_point time_point;
 
@@ -95,6 +97,28 @@ struct hash<address_v4::bytes_type> : hash<uint32_t>
 	[1]: http://libtorrent.org/dht_sec.html
  
  */
+
+std::atomic<uint64_t> incoming_queries;
+std::atomic<uint64_t> failed_nodeid_queries;
+std::atomic<uint64_t> outgoing_pings;
+std::atomic<uint64_t> invalid_pongs;
+std::atomic<uint64_t> added_nodes;
+
+void print_stats(deadline_timer& stats_timer, error_code const& ec)
+{
+	if (ec) return;
+
+	printf("in: %f id_failure: %f out_ping: %f"
+		" invalid_pong: %f added: %f\n"
+		, incoming_queries.exchange(0) / 10.f
+		, failed_nodeid_queries.exchange(0) / 10.f
+		, outgoing_pings.exchange(0) / 10.f
+		, invalid_pongs.exchange(0) / 10.f
+		, added_nodes.exchange(0) / 10.f
+		);
+	stats_timer.expires_from_now(boost::posix_time::seconds(60));
+	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
+}
 
 // this is the type of each node queued up
 // to be pinged at some point in the future
@@ -440,6 +464,8 @@ void router_thread(int threadid, udp::socket& sock)
 				fprintf(stderr, "PING send_to failed: (%d) %s\n", ec.value(), ec.message().c_str());
 			else if (len <= 0)
 				fprintf(stderr, "PING send_to failed: return=%d\n", len);
+			else
+				++outgoing_pings;
 		}
 
 		int len = sock.receive_from(buffer(packet, sizeof(packet)), ep, 0, ec);
@@ -500,8 +526,12 @@ void router_thread(int threadid, udp::socket& sock)
 
 			// if the transaction ID doesn't match, we did not send the ping.
 			// ignore it.
-			if (!verify_tid(transaction_id, secret1, secret2, remote_ip, node_id->string_ptr()))
+			if (!verify_tid(transaction_id, secret1, secret2
+				, remote_ip, node_id->string_ptr()))
+			{
+				++invalid_pongs;
 				continue;
+			}
 
 			// this shouldn't really happen
 			if (!is_valid_ip(ep))
@@ -510,6 +540,7 @@ void router_thread(int threadid, udp::socket& sock)
 			fprintf(stderr, "got ping response\n");
 
 			// verify that the node ID is valid for the source IP
+			// this shouldn't really fail
 			char h[20];
 			generate_id(ep.address(), node_id->string_ptr()[19], h);
 			if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
@@ -519,6 +550,7 @@ void router_thread(int threadid, udp::socket& sock)
 					continue;
 			}
 
+			++added_nodes;
 			node_buffer.insert_node(ep, node_id->string_ptr());
 		}
 		else if (cmd == "ping"
@@ -557,6 +589,7 @@ void router_thread(int threadid, udp::socket& sock)
 			b.add_string("r");
 
 			b.close_dict();
+			++incoming_queries;
 
 			int len = sock.send_to(buffer(response, b.end() - response), ep, 0, ec);
 			if (ec)
@@ -571,7 +604,10 @@ void router_thread(int threadid, udp::socket& sock)
 			{
 				generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
 				if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+				{
+					++failed_nodeid_queries;
 					continue;
+				}
 			}
 
 			// filter obvious invalid IPs, and IPv6 (since we only support
@@ -583,14 +619,6 @@ void router_thread(int threadid, udp::socket& sock)
 			}
 		}
 	}
-}
-
-void shutdown(udp::socket& s)
-{
-	error_code ec;
-	s.close(ec);
-	if (ec)
-		fprintf(stderr, "socket: (%d) %s\n", ec.value(), ec.message().c_str());
 }
 
 void print_usage()
@@ -643,13 +671,25 @@ int main(int argc, char* argv[])
 	// initialize our_node_id
 	generate_id(our_external_ip, std::rand(), our_node_id);
 
+	deadline_timer stats_timer(ios);
+	stats_timer.expires_from_now(boost::posix_time::seconds(60));
+	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
+
 	// listen on signals to be able to shut down
 	signal_set signals(ios);
 	signals.add(SIGINT);
 	signals.add(SIGTERM);
 
 	// close the socket when signalled to quit
-	signals.async_wait(boost::bind(&shutdown, std::ref(sock)));
+	signals.async_wait([&](error_code const& e, int signo)
+	{
+		error_code ec;
+		stats_timer.cancel();
+		sock.close(ec);
+		if (ec)
+			fprintf(stderr, "socket: (%d) %s\n"
+				, ec.value(), ec.message().c_str());
+	});
 
 	std::vector<std::thread> threads;
 	for (int i = 0; i < 4; ++i)
