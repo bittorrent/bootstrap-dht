@@ -655,7 +655,7 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	sock.bind(udp::endpoint(address_v4::any(), 6881), ec);
+	sock.bind(udp::endpoint(our_external_ip, 6881), ec);
 	if (ec)
 	{
 		fprintf(stderr, "bind: (%d) %s\n", ec.value(), ec.message().c_str());
