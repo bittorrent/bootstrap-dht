@@ -179,9 +179,9 @@ private:
 // in the circular buffer
 struct node_entry_t
 {
+	char node_id[20];
 	address_v4::bytes_type ip;
 	uint16_t port;
-	char node_id[20];
 };
 
 struct node_buffer_t
@@ -221,7 +221,8 @@ struct node_buffer_t
 		m_read_cursor += slice1;
 
 		int slice2 = 8 - slice1;
-		memcpy(&ret[slice1 * sizeof(node_entry_t)], &m_buffer[m_read_cursor], sizeof(node_entry_t) * slice2);
+		memcpy(&ret[slice1 * sizeof(node_entry_t)], &m_buffer[m_read_cursor]
+			, sizeof(node_entry_t) * slice2);
 		m_read_cursor = slice2;
 		return ret;
 	}
@@ -577,7 +578,7 @@ void router_thread(int threadid, udp::socket& sock)
 
 			if (cmd != "ping")
 			{
-				b.add_string("values");
+				b.add_string("nodes");
 				b.add_string(node_buffer.get_nodes());
 			}
 			b.close_dict();
