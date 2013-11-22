@@ -692,6 +692,7 @@ int main(int argc, char* argv[])
 	});
 
 	std::vector<std::thread> threads;
+	threads.reserve(4);
 	for (int i = 0; i < 4; ++i)
 		threads.emplace_back(&router_thread, i, std::ref(sock));
 
