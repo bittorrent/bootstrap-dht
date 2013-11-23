@@ -29,6 +29,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <type_traits>
 #include <random>
 #include <unordered_set>
+#include <set>
 #include <atomic>
 #include <mutex>
 
@@ -158,12 +159,14 @@ struct ping_queue_t
 
 		*out = m_queue.front();
 		m_queue.pop_front();
+		m_ips.erase(out->ep);
 		return true;
 	}
 
 	void insert_node(udp::endpoint const& ep, char const* node_id)
 	{
-// TODO: add uniqueness check here!
+		if (m_ips.count(ep)) return;
+
 		queued_node_t e;
 		e.ep = ep;
 		memcpy(e.node_id, node_id, 20);
@@ -177,10 +180,16 @@ struct ping_queue_t
 		e.expire = steady_clock::now() + minutes(10);
 
 		m_queue.push_back(e);
+		m_ips.insert(ep);
 	}
 
 private:
 
+	// the set of IPs in the queue. An IP is only allowed to appear once
+	std::set<udp::endpoint> m_ips;
+
+	// the queue of nodes we should ping, ordered by the
+	// time they were added
 	std::deque<queued_node_t> m_queue;
 };
 
