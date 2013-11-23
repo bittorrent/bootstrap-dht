@@ -30,6 +30,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <random>
 #include <unordered_set>
 #include <atomic>
+#include <mutex>
 
 #include <boost/uuid/sha1.hpp>
 #include <boost/crc.hpp>
@@ -102,8 +103,10 @@ struct hash<address_v4::bytes_type> : hash<uint32_t>
  */
 
 std::atomic<uint64_t> incoming_queries;
+std::atomic<uint64_t> invalid_src_address;
 std::atomic<uint64_t> failed_nodeid_queries;
 std::atomic<uint64_t> outgoing_pings;
+std::atomic<uint64_t> short_tid_pongs;
 std::atomic<uint64_t> invalid_pongs;
 std::atomic<uint64_t> added_nodes;
 
@@ -111,11 +114,13 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 {
 	if (ec) return;
 
-	printf("in: %f id_failure: %f out_ping: %f"
-		" invalid_pong: %f added: %f\n"
+	printf("in: %f invalid_src: %f id_failure: %f out_ping: %f"
+		" short_tid_pong: %f invalid_pong: %f added: %f\n"
 		, incoming_queries.exchange(0) / float(print_stats_interval)
+		, invalid_src_address.exchange(0) / float(print_stats_interval)
 		, failed_nodeid_queries.exchange(0) / float(print_stats_interval)
 		, outgoing_pings.exchange(0) / float(print_stats_interval)
+		, short_tid_pongs.exchange(0) / float(print_stats_interval)
 		, invalid_pongs.exchange(0) / float(print_stats_interval)
 		, added_nodes.exchange(0) / float(print_stats_interval)
 		);
@@ -158,6 +163,7 @@ struct ping_queue_t
 
 	void insert_node(udp::endpoint const& ep, char const* node_id)
 	{
+// TODO: add uniqueness check here!
 		queued_node_t e;
 		e.ep = ep;
 		memcpy(e.node_id, node_id, 20);
@@ -282,13 +288,11 @@ std::string compute_tid(char const* secret, char const* remote_ip
 	uint32_t d[5];
 	ctx.get_digest(d);
 	std::string ret;
-	ret.resize(6);
+	ret.resize(4);
 	ret[0] = (d[0] >> 24) & 0xff;
 	ret[1] = (d[0] >> 16) & 0xff;
 	ret[2] = (d[0] >> 8) & 0xff;
 	ret[3] = d[0] & 0xff;
-	ret[4] = (d[1] >> 24) & 0xff;
-	ret[5] = (d[1] >> 16) & 0xff;
 	return ret;
 }
 
@@ -296,7 +300,7 @@ bool verify_tid(std::string tid, char const* secret1, char const* secret2
 	, char const* remote_ip, char const* node_id)
 {
 	// we use 6 byte transaction IDs
-	if (tid.size() != 6) return false;
+	if (tid.size() != 4) return false;
 
 	return compute_tid(secret1, remote_ip, node_id) == tid
 		|| compute_tid(secret2, remote_ip, node_id) == tid;
@@ -398,6 +402,11 @@ bool is_valid_ip(udp::endpoint const& ep)
 	return true;
 }
 
+std::atomic<char*> secret1(nullptr);
+std::atomic<char*> secret2(nullptr);
+steady_clock::time_point last_secret_rotate;
+std::mutex secret_mutex;
+
 void router_thread(int threadid, udp::socket& sock)
 {
 	printf("starting thread %d\n", threadid);
@@ -411,26 +420,28 @@ void router_thread(int threadid, udp::socket& sock)
 	// the response packet
 	char response[1500];
 
-	char secret1[20];
-	char secret2[20];
-
-	std::random_device r;
-	std::generate(secret1, secret1 + 20, std::ref(r));
-	std::generate(secret2, secret2 + 20, std::ref(r));
-
-	time_point last_secret_rotate = steady_clock::now();
-
 	for (;;)
 	{
 		udp::endpoint ep;
 		error_code ec;
 
 		// rotate the secrets every 10 minutes
-		if (last_secret_rotate + minutes(10) < steady_clock::now())
+		steady_clock::time_point now = steady_clock::now();
+		if (last_secret_rotate + minutes(10) < now)
 		{
-			std::memcpy(secret2, secret1, 20);
-			std::generate(secret1, secret1 + 20, std::ref(r));
-			last_secret_rotate = steady_clock::now();
+			std::lock_guard<std::mutex> l(secret_mutex);
+			if (last_secret_rotate + minutes(10) < now)
+			{
+				last_secret_rotate = now;
+
+				// TODO: this is a race condition. add a third buffer to keep the intermediate secret in
+				char* old_secret = secret1;
+				secret2 = secret1.load();
+
+				std::random_device r;
+				std::generate(old_secret, old_secret + 20, std::ref(r));
+				secret1 = old_secret;
+			}
 		}
 
 		// if we need to ping nodes, do that now
@@ -486,8 +497,14 @@ void router_thread(int threadid, udp::socket& sock)
 				printf("stopping thread %d\n", threadid);
 				return;
 			}
-//			fprintf(stderr, "receive_from: (%d) %s\n", ec.value(), ec.message().c_str());
+			fprintf(stderr, "receive_from: (%d) %s\n", ec.value(), ec.message().c_str());
 			return;
+		}
+
+		if (ep.port() == 0)
+		{
+			++invalid_src_address;
+			continue;
 		}
 
 		// no support for IPv6
@@ -498,7 +515,11 @@ void router_thread(int threadid, udp::socket& sock)
 
 		lazy_entry e;
 		int ret = lazy_bdecode(packet, &packet[len], e, ec, nullptr, 5, 100);
-		if (ec || ret != 0) continue;
+		if (ec || ret != 0)
+		{
+// TODO: count
+			continue;
+		}
 
 //		printf("R: %s\n", print_entry(e, true).c_str());
 
@@ -529,6 +550,12 @@ void router_thread(int threadid, udp::socket& sock)
 
 		if (cmd.empty())
 		{
+			if (transaction_id.size() != 4)
+			{
+				++short_tid_pongs;
+//				continue;
+			}
+
 			// this is a response, presumably to a ping, since that's
 			// the only message we send out
 
@@ -601,7 +628,9 @@ void router_thread(int threadid, udp::socket& sock)
 
 			int len = sock.send_to(buffer(response, b.end() - response), ep, 0, ec);
 			if (ec)
-				fprintf(stderr, "send_to failed: (%d) %s\n", ec.value(), ec.message().c_str());
+				fprintf(stderr, "send_to failed: [cmd: %s dest: %s:%d] (%d) %s\n"
+					, cmd.c_str(), ep.address().to_string().c_str()
+					, ep.port(), ec.value(), ec.message().c_str());
 			else if (len <= 0)
 				fprintf(stderr, "send_to failed: return=%d\n", len);
 
@@ -698,6 +727,15 @@ int main(int argc, char* argv[])
 			fprintf(stderr, "socket: (%d) %s\n"
 				, ec.value(), ec.message().c_str());
 	});
+
+	std::random_device r;
+	char* secret = new char[20];
+	std::generate(secret, secret + 20, std::ref(r));
+	secret1 = secret;
+	secret = new char[20];
+	std::generate(secret, secret + 20, std::ref(r));
+	secret2 = secret;
+	last_secret_rotate = steady_clock::now();
 
 	std::vector<std::thread> threads;
 	threads.reserve(4);
