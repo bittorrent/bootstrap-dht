@@ -54,6 +54,7 @@ using namespace std::placeholders;
 typedef steady_clock::time_point time_point;
 
 const int print_stats_interval = 60;
+const int nodes_in_response = 8;
 
 namespace std {
 
@@ -77,7 +78,7 @@ struct hash<address_v4::bytes_type> : hash<uint32_t>
 	In this circular buffer there are two cursors, one read
 	cursor and one write cursor.
 	When a find_nodes request comes in, we return the next
-	8 nodes under the read cursor and progresses it.
+	8 nodes  (or so) under the read cursor and progresses it.
 	
 	We remember the node that asked in a separate queue.
 	At a later time we send ping it. If it responds, we
@@ -200,7 +201,7 @@ struct node_buffer_t
 	{
 		std::string ret;
 
-		if (m_buffer.size() < 8)
+		if (m_buffer.size() < nodes_in_response)
 		{
 			ret.resize(m_buffer.size() * sizeof(node_entry_t));
 			memcpy(&ret[0], &m_buffer[0], m_buffer.size() * sizeof(node_entry_t));
@@ -208,21 +209,24 @@ struct node_buffer_t
 			return ret;
 		}
 
-		ret.resize(8 * sizeof(node_entry_t));
+		ret.resize(nodes_in_response * sizeof(node_entry_t));
+
+		if (m_read_cursor == m_buffer.size())
+			m_read_cursor = 0;
 		
-		if (m_read_cursor < m_buffer.size() - 8)
+		if (m_read_cursor <= m_buffer.size() - nodes_in_response)
 		{
-			memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_t) * 8);
-			m_read_cursor += 8;
+			memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_t) * nodes_in_response);
+			m_read_cursor += nodes_in_response;
 			return ret;
 		}
 
 		int slice1 = m_buffer.size() - m_read_cursor;
-		assert(slice1 < 8);
+		assert(slice1 < nodes_in_response);
 		memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_t) * slice1);
 		m_read_cursor += slice1;
 
-		int slice2 = 8 - slice1;
+		int slice2 = nodes_in_response - slice1;
 		memcpy(&ret[slice1 * sizeof(node_entry_t)], &m_buffer[m_read_cursor]
 			, sizeof(node_entry_t) * slice2);
 		m_read_cursor = slice2;
@@ -433,7 +437,7 @@ void router_thread(int threadid, udp::socket& sock)
 		queued_node_t n;
 		while (ping_queue.need_ping(&n, node_buffer.need_growth()))
 		{
-			fprintf(stderr, "pinging node\n");
+//			fprintf(stderr, "pinging node\n");
 			// build the IP field
 			char remote_ip[6];
 			address_v4::bytes_type ip = n.ep.address().to_v4().to_bytes();
@@ -463,12 +467,13 @@ void router_thread(int threadid, udp::socket& sock)
 			b.close_dict();
 
 			int len = sock.send_to(buffer(response, b.end() - response), n.ep, 0, ec);
-			if (ec)
+			if (ec) {
 				fprintf(stderr, "PING send_to failed: (%d) %s\n", ec.value(), ec.message().c_str());
-			else if (len <= 0)
+			} else if (len <= 0) {
 				fprintf(stderr, "PING send_to failed: return=%d\n", len);
-			else
+			} else {
 				++outgoing_pings;
+			}
 		}
 
 		int len = sock.receive_from(buffer(packet, sizeof(packet)), ep, 0, ec);
@@ -481,7 +486,7 @@ void router_thread(int threadid, udp::socket& sock)
 				printf("stopping thread %d\n", threadid);
 				return;
 			}
-			fprintf(stderr, "receive_from: (%d) %s\n", ec.value(), ec.message().c_str());
+//			fprintf(stderr, "receive_from: (%d) %s\n", ec.value(), ec.message().c_str());
 			return;
 		}
 
@@ -495,7 +500,7 @@ void router_thread(int threadid, udp::socket& sock)
 		int ret = lazy_bdecode(packet, &packet[len], e, ec, nullptr, 5, 100);
 		if (ec || ret != 0) continue;
 
-		printf("R: %s\n", print_entry(e, true).c_str());
+//		printf("R: %s\n", print_entry(e, true).c_str());
 
 		// find the interesting fields from the message.
 		// i.e. the kind of query, the transaction id and the node id
@@ -540,7 +545,7 @@ void router_thread(int threadid, udp::socket& sock)
 			if (!is_valid_ip(ep))
 				continue;
 
-			fprintf(stderr, "got ping response\n");
+//			fprintf(stderr, "got ping response\n");
 
 			// verify that the node ID is valid for the source IP
 			// this shouldn't really fail
