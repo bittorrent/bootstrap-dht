@@ -53,6 +53,8 @@ using namespace std::placeholders;
 
 typedef steady_clock::time_point time_point;
 
+const int print_stats_interval = 60;
+
 namespace std {
 
 template <>
@@ -110,13 +112,13 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 
 	printf("in: %f id_failure: %f out_ping: %f"
 		" invalid_pong: %f added: %f\n"
-		, incoming_queries.exchange(0) / 10.f
-		, failed_nodeid_queries.exchange(0) / 10.f
-		, outgoing_pings.exchange(0) / 10.f
-		, invalid_pongs.exchange(0) / 10.f
-		, added_nodes.exchange(0) / 10.f
+		, incoming_queries.exchange(0) / float(print_stats_interval)
+		, failed_nodeid_queries.exchange(0) / float(print_stats_interval)
+		, outgoing_pings.exchange(0) / float(print_stats_interval)
+		, invalid_pongs.exchange(0) / float(print_stats_interval)
+		, added_nodes.exchange(0) / float(print_stats_interval)
 		);
-	stats_timer.expires_from_now(boost::posix_time::seconds(60));
+	stats_timer.expires_from_now(boost::posix_time::seconds(print_stats_interval));
 	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
 }
 
@@ -673,7 +675,7 @@ int main(int argc, char* argv[])
 	generate_id(our_external_ip, std::rand(), our_node_id);
 
 	deadline_timer stats_timer(ios);
-	stats_timer.expires_from_now(boost::posix_time::seconds(60));
+	stats_timer.expires_from_now(boost::posix_time::seconds(print_stats_interval));
 	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
 
 	// listen on signals to be able to shut down
