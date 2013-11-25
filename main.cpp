@@ -104,6 +104,7 @@ struct hash<address_v4::bytes_type> : hash<uint32_t>
  */
 
 std::atomic<uint64_t> incoming_queries;
+std::atomic<uint64_t> invalid_encoding;
 std::atomic<uint64_t> invalid_src_address;
 std::atomic<uint64_t> failed_nodeid_queries;
 std::atomic<uint64_t> outgoing_pings;
@@ -115,9 +116,10 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 {
 	if (ec) return;
 
-	printf("in: %f invalid_src: %f id_failure: %f out_ping: %f"
+	printf("in: %f invalid_enc: %f invalid_src: %f id_failure: %f out_ping: %f"
 		" short_tid_pong: %f invalid_pong: %f added: %f\n"
 		, incoming_queries.exchange(0) / float(print_stats_interval)
+		, invalid_encoding.exchange(0) / float(print_stats_interval)
 		, invalid_src_address.exchange(0) / float(print_stats_interval)
 		, failed_nodeid_queries.exchange(0) / float(print_stats_interval)
 		, outgoing_pings.exchange(0) / float(print_stats_interval)
@@ -535,7 +537,7 @@ void router_thread(int threadid, udp::socket& sock)
 		int ret = lazy_bdecode(packet, &packet[len], e, ec, nullptr, 5, 100);
 		if (ec || ret != 0)
 		{
-// TODO: count
+			++invalid_encoding;
 			continue;
 		}
 
@@ -571,7 +573,7 @@ void router_thread(int threadid, udp::socket& sock)
 			if (transaction_id.size() != 4)
 			{
 				++short_tid_pongs;
-//				continue;
+				continue;
 			}
 
 			// this is a response, presumably to a ping, since that's
