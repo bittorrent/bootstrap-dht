@@ -413,6 +413,7 @@ bool is_valid_ip(udp::endpoint const& ep)
 
 std::atomic<char*> secret1(nullptr);
 std::atomic<char*> secret2(nullptr);
+std::atomic<char*> intermediate(nullptr);
 steady_clock::time_point last_secret_rotate;
 std::mutex secret_mutex;
 
@@ -443,13 +444,21 @@ void router_thread(int threadid, udp::socket& sock)
 			{
 				last_secret_rotate = now;
 
-				// TODO: this is a race condition. add a third buffer to keep the intermediate secret in
+				// there are three buffers in total and two of
+				// them are exposed via secret1 and secret2 at
+				// any given time. The old_secret needs to be
+				// kept around for a bit to avoid race conditions
+				// with threads that may have just grabbed the
+				// pointer to it. It's rotated into the intermediate
+				// slot.
 				char* old_secret = secret1;
 				secret2 = secret1.load();
 
 				std::random_device r;
-				std::generate(old_secret, old_secret + 20, std::ref(r));
-				secret1 = old_secret;
+				char* i = intermediate.load();
+				std::generate(i, i + 20, std::ref(r));
+				secret1 = i;
+				intermediate = old_secret;
 			}
 		}
 
@@ -744,6 +753,7 @@ int main(int argc, char* argv[])
 	secret = new char[20];
 	std::generate(secret, secret + 20, std::ref(r));
 	secret2 = secret;
+	intermediate = new char[20];
 	last_secret_rotate = steady_clock::now();
 
 	std::vector<std::thread> threads;
@@ -760,6 +770,10 @@ int main(int argc, char* argv[])
 
 	for (auto& i : threads)
 		i.join();
+
+	delete[] secret1.load();
+	delete[] secret2.load();
+	delete[] intermediate.load();
 
 	return 0;
 }
