@@ -56,7 +56,7 @@ using namespace std::placeholders;
 typedef steady_clock::time_point time_point;
 
 const int print_stats_interval = 60;
-const int nodes_in_response = 8;
+const int nodes_in_response = 16;
 
 namespace std {
 
