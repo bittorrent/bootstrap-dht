@@ -179,7 +179,7 @@ struct ping_queue_t
 		// NAT or not be NATed at all (which is the way we like our nodes).
 		// also, it still being up is a good predictor for it staying up
 		// longer as well.
-		e.expire = steady_clock::now() + minutes(10);
+		e.expire = steady_clock::now() + minutes(15);
 
 		m_queue.push_back(e);
 		m_ips.insert(ep);
@@ -289,7 +289,7 @@ private:
 char our_node_id[20];
 
 
-std::string compute_tid(char const* secret, char const* remote_ip
+std::string compute_tid(uint8_t const* secret, char const* remote_ip
 	, char const* node_id)
 {
 	sha1 ctx;
@@ -307,7 +307,7 @@ std::string compute_tid(char const* secret, char const* remote_ip
 	return ret;
 }
 
-bool verify_tid(std::string tid, char const* secret1, char const* secret2
+bool verify_tid(std::string tid, uint8_t const* secret1, uint8_t const* secret2
 	, char const* remote_ip, char const* node_id)
 {
 	// we use 6 byte transaction IDs
@@ -413,9 +413,9 @@ bool is_valid_ip(udp::endpoint const& ep)
 	return true;
 }
 
-std::atomic<char*> secret1(nullptr);
-std::atomic<char*> secret2(nullptr);
-std::atomic<char*> intermediate(nullptr);
+std::atomic<uint8_t*> secret1(nullptr);
+std::atomic<uint8_t*> secret2(nullptr);
+std::atomic<uint8_t*> intermediate(nullptr);
 steady_clock::time_point last_secret_rotate;
 std::mutex secret_mutex;
 
@@ -425,6 +425,10 @@ void router_thread(int threadid, udp::socket& sock)
 
 	ping_queue_t ping_queue;
 	node_buffer_t node_buffer;
+
+	std::random_device r;
+	std::mt19937 rand(r());
+	std::uniform_int_distribution<uint8_t> random_byte(0, 0xff);
 
 	// the incoming packet
 	char packet[1500];
@@ -446,6 +450,7 @@ void router_thread(int threadid, udp::socket& sock)
 			{
 				last_secret_rotate = now;
 
+				rand.seed(r());
 				// there are three buffers in total and two of
 				// them are exposed via secret1 and secret2 at
 				// any given time. The old_secret needs to be
@@ -453,12 +458,11 @@ void router_thread(int threadid, udp::socket& sock)
 				// with threads that may have just grabbed the
 				// pointer to it. It's rotated into the intermediate
 				// slot.
-				char* old_secret = secret1;
+				uint8_t* old_secret = secret1;
 				secret2 = secret1.load();
 
-				std::random_device r;
-				char* i = intermediate.load();
-				std::generate(i, i + 20, std::ref(r));
+				uint8_t* i = intermediate.load();
+				std::generate(i, i + 20, [&](){ return random_byte(rand);});
 				secret1 = i;
 				intermediate = old_secret;
 			}
@@ -749,13 +753,16 @@ int main(int argc, char* argv[])
 	});
 
 	std::random_device r;
-	char* secret = new char[20];
-	std::generate(secret, secret + 20, std::ref(r));
+	std::mt19937 rand(r());
+	std::uniform_int_distribution<uint8_t> random_byte(0, 0xff);
+
+	uint8_t* secret = new uint8_t[20];
+	std::generate(secret, secret + 20, [&](){ return random_byte(rand);});
 	secret1 = secret;
-	secret = new char[20];
-	std::generate(secret, secret + 20, std::ref(r));
+	secret = new uint8_t[20];
+	std::generate(secret, secret + 20, [&](){ return random_byte(rand);});
 	secret2 = secret;
-	intermediate = new char[20];
+	intermediate = new uint8_t[20];
 	last_secret_rotate = steady_clock::now();
 
 	std::vector<std::thread> threads;
