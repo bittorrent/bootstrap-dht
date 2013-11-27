@@ -32,6 +32,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <set>
 #include <atomic>
 #include <mutex>
+#include <unordered_map>
 
 #include <boost/uuid/sha1.hpp>
 #include <boost/crc.hpp>
@@ -57,6 +58,9 @@ typedef steady_clock::time_point time_point;
 
 const int print_stats_interval = 60;
 const int nodes_in_response = 16;
+
+std::mutex client_mutex;
+std::unordered_map<uint16_t, int> client_histogram;
 
 namespace std {
 
@@ -116,8 +120,8 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 {
 	if (ec) return;
 
-	printf("in: %f invalid_enc: %f invalid_src: %f id_failure: %f out_ping: %f"
-		" short_tid_pong: %f invalid_pong: %f added: %f\n"
+	printf("in: %.1f invalid_enc: %.1f invalid_src: %.1f id_failure: %.1f out_ping: %.1f"
+		" short_tid_pong: %.1f invalid_pong: %.1f added: %.1f\n"
 		, incoming_queries.exchange(0) / float(print_stats_interval)
 		, invalid_encoding.exchange(0) / float(print_stats_interval)
 		, invalid_src_address.exchange(0) / float(print_stats_interval)
@@ -127,6 +131,17 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 		, invalid_pongs.exchange(0) / float(print_stats_interval)
 		, added_nodes.exchange(0) / float(print_stats_interval)
 		);
+
+	std::lock_guard<std::mutex> l(client_mutex);
+	std::vector<std::pair<int, uint16_t>> ordered;
+	for (auto i : client_histogram) {
+		ordered.emplace_back(i.second, i.first);
+	}
+	std::sort(ordered.begin(), ordered.end());
+	for (auto i : ordered) {
+		printf("[%c%c: %d] ", (i.second >> 8) & 0xff, i.second & 0xff, i.first);
+	}
+	printf("\n");
 	stats_timer.expires_from_now(boost::posix_time::seconds(print_stats_interval));
 	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
 }
@@ -153,9 +168,9 @@ struct ping_queue_t
 	{
 		if (m_queue.empty()) return false;
 		
-		// if the queue size exceeds 10000, start pinging more aggressively
+		// if the queue size exceeds 100000, start pinging more aggressively
 		// as well, to work down the queue size
-		if (!force && m_queue.size() > 10000
+		if (!force && m_queue.size() > 100000
 			&& m_queue.front().expire < steady_clock::now())
 			return false;
 
@@ -208,7 +223,7 @@ struct node_buffer_t
 {
 	node_buffer_t() : m_read_cursor(0), m_write_cursor(0) {}
 
-	enum { ideal_size = 10000 };
+	enum { ideal_size = 1000000 };
 
 	bool empty() const { return m_buffer.empty(); }
 
@@ -321,25 +336,19 @@ void generate_id(address const& ip_, boost::uint32_t r, char* id)
 {
 	boost::uint8_t* ip = 0;
 	
-	const static boost::uint8_t v4mask[] = { 0x01, 0x07, 0x1f, 0x7f };
-	boost::uint8_t const* mask = 0;
-	int num_octets = 0;
+	const static boost::uint8_t mask[] = { 0x01, 0x07, 0x1f, 0x7f };
 
 	address_v4::bytes_type b4;
-	{
-		b4 = ip_.to_v4().to_bytes();
-		ip = &b4[0];
-		num_octets = 4;
-		mask = v4mask;
-	}
+	b4 = ip_.to_v4().to_bytes();
+	ip = &b4[0];
 
-	for (int i = 0; i < num_octets; ++i)
+	for (int i = 0; i < 4; ++i)
 		ip[i] &= mask[i];
 
 	boost::uint8_t rand = r & 0x7;
 
 	boost::crc_32_type crc;
-	crc.process_block(ip, ip + num_octets);
+	crc.process_block(ip, ip + 4);
 	crc.process_byte(rand);
 	boost::uint32_t c = crc.checksum();
 
@@ -358,19 +367,13 @@ void generate_id_sha1(address const& ip_, boost::uint32_t r, char* id)
 {
 	boost::uint8_t* ip = 0;
 	
-	const static boost::uint8_t v4mask[] = { 0x01, 0x07, 0x1f, 0x7f };
-	boost::uint8_t const* mask = 0;
-	int num_octets = 0;
+	const static boost::uint8_t mask[] = { 0x01, 0x07, 0x1f, 0x7f };
 
 	address_v4::bytes_type b4;
-	{
-		b4 = ip_.to_v4().to_bytes();
-		ip = &b4[0];
-		num_octets = 4;
-		mask = v4mask;
-	}
+	b4 = ip_.to_v4().to_bytes();
+	ip = &b4[0];
 
-	for (int i = 0; i < num_octets; ++i)
+	for (int i = 0; i < 4; ++i)
 		ip[i] &= mask[i];
 
 	boost::uint8_t rand = r & 0x7;
@@ -379,16 +382,15 @@ void generate_id_sha1(address const& ip_, boost::uint32_t r, char* id)
 	// host endian. We need to turn it into
 	// big endian.
 	sha1 ctx;
-	ctx.process_bytes(ip, num_octets);
+	ctx.process_bytes(ip, 4);
 	ctx.process_byte(rand);
 	uint32_t d[5];
 	ctx.get_digest(d);
-	boost::uint32_t c = htonl(d[0]);
 
-	id[0] = (c >> 24) & 0xff;
-	id[1] = (c >> 16) & 0xff;
-	id[2] = (c >> 8) & 0xff;
-	id[3] = c & 0xff;
+	id[0] = (d[0] >> 24) & 0xff;
+	id[1] = (d[0] >> 16) & 0xff;
+	id[2] = (d[0] >> 8) & 0xff;
+	id[3] = d[0] & 0xff;
 
 	for (int i = 4; i < 19; ++i) id[i] = std::rand();
 	id[19] = r;
@@ -539,12 +541,20 @@ void router_thread(int threadid, udp::socket& sock)
 
 		lazy_entry e;
 		int ret = lazy_bdecode(packet, &packet[len], e, ec, nullptr, 5, 100);
-		if (ec || ret != 0)
+		if (ec || ret != 0 || e.type() != lazy_entry::dict_t)
 		{
 			++invalid_encoding;
 			continue;
 		}
 
+		std::string v = e.dict_find_string_value("v");
+		if (v.size() >= 2
+			&& std::isprint(uint8_t(v[0]))
+			&& std::isprint(uint8_t(v[1]))) {
+			std::lock_guard<std::mutex> l(client_mutex);
+			uint16_t client = (uint8_t(v[0]) << 8) | uint8_t(v[1]);
+			++client_histogram[client];
+		}
 //		printf("R: %s\n", print_entry(e, true).c_str());
 
 		// find the interesting fields from the message.
