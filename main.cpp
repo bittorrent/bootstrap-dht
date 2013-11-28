@@ -59,8 +59,10 @@ typedef steady_clock::time_point time_point;
 const int print_stats_interval = 60;
 const int nodes_in_response = 16;
 
+#ifdef CLIENTS_STAT
 std::mutex client_mutex;
 std::unordered_map<uint16_t, int> client_histogram;
+#endif
 
 namespace std {
 
@@ -132,6 +134,7 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 		, added_nodes.exchange(0) / float(print_stats_interval)
 		);
 
+#ifdef CLIENTS_STAT
 	std::lock_guard<std::mutex> l(client_mutex);
 	std::vector<std::pair<int, uint16_t>> ordered;
 	for (auto i : client_histogram) {
@@ -142,6 +145,7 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 		printf("[%c%c: %d] ", (i.second >> 8) & 0xff, i.second & 0xff, i.first);
 	}
 	printf("\n");
+#endif
 	stats_timer.expires_from_now(boost::posix_time::seconds(print_stats_interval));
 	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
 }
@@ -168,10 +172,7 @@ struct ping_queue_t
 	{
 		if (m_queue.empty()) return false;
 		
-		// if the queue size exceeds 100000, start pinging more aggressively
-		// as well, to work down the queue size
-		if (!force && m_queue.size() > 100000
-			&& m_queue.front().expire < steady_clock::now())
+		if (!force && m_queue.front().expire < steady_clock::now())
 			return false;
 
 		*out = m_queue.front();
@@ -183,6 +184,9 @@ struct ping_queue_t
 	void insert_node(udp::endpoint const& ep, char const* node_id)
 	{
 		if (m_ips.count(ep)) return;
+
+		// don't let the queue get too big
+		if (m_queue.size() > 100000) return;
 
 		queued_node_t e;
 		e.ep = ep;
@@ -547,6 +551,7 @@ void router_thread(int threadid, udp::socket& sock)
 			continue;
 		}
 
+#ifdef CLIENTS_STAT
 		std::string v = e.dict_find_string_value("v");
 		if (v.size() >= 2
 			&& std::isprint(uint8_t(v[0]))
@@ -555,6 +560,7 @@ void router_thread(int threadid, udp::socket& sock)
 			uint16_t client = (uint8_t(v[0]) << 8) | uint8_t(v[1]);
 			++client_histogram[client];
 		}
+#endif
 //		printf("R: %s\n", print_entry(e, true).c_str());
 
 		// find the interesting fields from the message.
