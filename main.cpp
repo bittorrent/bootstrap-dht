@@ -126,7 +126,8 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 {
 	if (ec) return;
 
-	printf("ping-queue: %" PRId64 "s in: %.1f invalid_enc: %.1f invalid_src: %.1f id_failure: %.1f out_ping: %.1f"
+	printf("ping-queue: %" PRId64 "s in: %.1f invalid_enc: %.1f"
+		" invalid_src: %.1f id_failure: %.1f out_ping: %.1f"
 		" short_tid_pong: %.1f invalid_pong: %.1f added: %.1f\n"
 		, queue_time.load()
 		, incoming_queries.exchange(0) / float(print_stats_interval)
@@ -150,6 +151,7 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 		printf("[%c%c: %d] ", (i.second >> 8) & 0xff, i.second & 0xff, i.first);
 	}
 	printf("\n");
+	client_histogram.clear();
 #endif
 	stats_timer.expires_from_now(boost::posix_time::seconds(print_stats_interval));
 	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
