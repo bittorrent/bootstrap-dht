@@ -33,6 +33,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
+#include <cinttypes> // for PRId64
 
 #include <boost/uuid/sha1.hpp>
 #include <boost/crc.hpp>
@@ -51,6 +52,7 @@ using boost::asio::buffer;
 using std::chrono::steady_clock;
 using std::chrono::minutes;
 using std::chrono::seconds;
+using std::chrono::duration_cast;
 using boost::uuids::detail::sha1;
 using namespace std::placeholders;
 
@@ -118,12 +120,15 @@ std::atomic<uint64_t> short_tid_pongs;
 std::atomic<uint64_t> invalid_pongs;
 std::atomic<uint64_t> added_nodes;
 
+std::atomic<uint64_t> queue_time;
+
 void print_stats(deadline_timer& stats_timer, error_code const& ec)
 {
 	if (ec) return;
 
-	printf("in: %.1f invalid_enc: %.1f invalid_src: %.1f id_failure: %.1f out_ping: %.1f"
+	printf("ping-queue: %" PRId64 "s in: %.1f invalid_enc: %.1f invalid_src: %.1f id_failure: %.1f out_ping: %.1f"
 		" short_tid_pong: %.1f invalid_pong: %.1f added: %.1f\n"
+		, queue_time.load()
 		, incoming_queries.exchange(0) / float(print_stats_interval)
 		, invalid_encoding.exchange(0) / float(print_stats_interval)
 		, invalid_src_address.exchange(0) / float(print_stats_interval)
@@ -163,6 +168,10 @@ struct queued_node_t
 
 struct ping_queue_t
 {
+	ping_queue_t() : m_queue_time(0) {}
+
+	int queue_time() const { return m_queue_time; }
+
 	// asks the ping-queue if there is another node that
 	// should be pinged right now. Returns false if not.
 	// force can be used to make the queue disregard what
@@ -172,12 +181,17 @@ struct ping_queue_t
 	{
 		if (m_queue.empty()) return false;
 		
-		if (!force && m_queue.front().expire < steady_clock::now())
+		time_point now = steady_clock::now();
+		if (!force && m_queue.front().expire < now)
 			return false;
 
 		*out = m_queue.front();
 		m_queue.pop_front();
 		m_ips.erase(out->ep);
+
+		time_point time_added = out->expire - minutes(15);
+		m_queue_time = duration_cast<std::chrono::seconds>(now - time_added).count();
+
 		return true;
 	}
 
@@ -212,6 +226,10 @@ private:
 	// the queue of nodes we should ping, ordered by the
 	// time they were added
 	std::deque<queued_node_t> m_queue;
+
+	// the number of seconds nodes stay in the queue
+	// before being pinged
+	int m_queue_time;
 };
 
 // this is the type of each node entry
@@ -517,6 +535,7 @@ void router_thread(int threadid, udp::socket& sock)
 			}
 		}
 
+		queue_time = ping_queue.queue_time();
 		int len = sock.receive_from(buffer(packet, sizeof(packet)), ep, 0, ec);
 		if (ec)
 		{
