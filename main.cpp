@@ -60,6 +60,8 @@ typedef steady_clock::time_point time_point;
 
 const int print_stats_interval = 60;
 const int nodes_in_response = 16;
+int node_buffer_size = 1000000;
+int ping_queue_size = 1000000;
 
 #ifdef CLIENTS_STAT
 std::mutex client_mutex;
@@ -202,7 +204,7 @@ struct ping_queue_t
 		if (m_ips.count(ep)) return;
 
 		// don't let the queue get too big
-		if (m_queue.size() > 100000) return;
+		if (m_queue.size() > ping_queue_size) return;
 
 		queued_node_t e;
 		e.ep = ep;
@@ -247,11 +249,9 @@ struct node_buffer_t
 {
 	node_buffer_t() : m_read_cursor(0), m_write_cursor(0) {}
 
-	enum { ideal_size = 1000000 };
-
 	bool empty() const { return m_buffer.empty(); }
 
-	bool need_growth() const { return m_buffer.size() < ideal_size; }
+	bool need_growth() const { return m_buffer.size() < node_buffer_size; }
 
 	std::string get_nodes()
 	{
@@ -299,7 +299,7 @@ struct node_buffer_t
 		// only allow once entry per IP
 		if (m_ips.count(e.ip)) return;
 
-		if (m_buffer.size() < ideal_size)
+		if (m_buffer.size() < node_buffer_size)
 		{
 			m_buffer.push_back(e);
 			m_ips.insert(e.ip);
@@ -721,18 +721,93 @@ void router_thread(int threadid, udp::socket& sock)
 
 void print_usage()
 {
-	fprintf(stderr, "usage: dht-bootstrap <external-IP>\n");
+	fprintf(stderr, "usage: dht-bootstrap <external-IP> [options]\n"
+		"\n"
+		"OPTIONS:\n"
+		"--help                prints this message.\n"
+		"--threads <n>         spawns <n> threads (defaults to the\n"
+		"                      number of hardware cores).\n"
+		"--nodes <n>           sets the number of nodes to keep in\n"
+		"                      the node buffer. Once full, the oldest\n"
+		"                      nodes are replaced as new nodes come in.\n"
+		"--ping-queue <n>      sets the max number of nodes to keep in\n"
+		"                      the ping queue. Nodes are held in the queue\n"
+		"                      for 15 minutes.\n"
+		"\n"
+		"\n"
+
+	);
 }
 
 int main(int argc, char* argv[])
 {
-	static_assert(sizeof(node_entry_t) == 26, "node_entry_t may not contain padding");
-
-	if (argc != 2)
+	if (argc < 2)
 	{
 		print_usage();
 		return 1;
 	}
+
+	int num_threads = std::thread::hardware_concurrency();
+
+	for (int i = 1; i < argc; ++i)
+	{
+		if (strcmp(argv[i], "--help") == 0)
+		{
+			print_usage();
+			return 0;
+		}
+		else if (strcmp(argv[i], "--threads") == 0)
+		{
+			++i;
+			if (i >= argc)
+			{
+				fprintf(stderr, "--threads expects an integer argument\n");
+				return 1;
+			}
+			num_threads = atoi(argv[i]);
+			if (num_threads > std::thread::hardware_concurrency())
+			{
+				fprintf(stderr, "WARNING: using more threads (%d) than cores (%d)\n"
+					, num_threads, std::thread::hardware_concurrency());
+			}
+			if (num_threads <= 0) num_threads = 1;
+		}
+		else if (strcmp(argv[i], "--nodes") == 0)
+		{
+			++i;
+			if (i >= argc)
+			{
+				fprintf(stderr, "--nodes expects an integer argument\n");
+				return 1;
+			}
+			node_buffer_size = atoi(argv[i]);
+			if (node_buffer_size <= 1000)
+			{
+				node_buffer_size = 1000;
+				fprintf(stderr, "WARNING: node buffer suspiciously small, using %d\n"
+					, node_buffer_size);
+			}
+		}
+		else if (strcmp(argv[i], "--ping-queue") == 0)
+		{
+			++i;
+			if (i >= argc)
+			{
+				fprintf(stderr, "--ping-queue expects an integer argument\n");
+				return 1;
+			}
+			ping_queue_size = atoi(argv[i]);
+			if (ping_queue_size < 10)
+			{
+				ping_queue_size = 10;
+				fprintf(stderr, "WARNING: ping queue suspiciously small, using %d\n"
+					, ping_queue_size);
+			}
+		}
+
+	}
+
+	static_assert(sizeof(node_entry_t) == 26, "node_entry_t may not contain padding");
 
 	error_code ec;
 	address_v4 our_external_ip = address_v4::from_string(argv[1], ec);
@@ -803,8 +878,8 @@ int main(int argc, char* argv[])
 	last_secret_rotate = steady_clock::now();
 
 	std::vector<std::thread> threads;
-	threads.reserve(4);
-	for (int i = 0; i < 4; ++i)
+	threads.reserve(num_threads);
+	for (int i = 0; i < num_threads; ++i)
 		threads.emplace_back(&router_thread, i, std::ref(sock));
 
 	ios.run(ec);
