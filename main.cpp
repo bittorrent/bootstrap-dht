@@ -247,7 +247,10 @@ struct node_entry_t
 
 struct node_buffer_t
 {
-	node_buffer_t() : m_read_cursor(0), m_write_cursor(0) {}
+	node_buffer_t() : m_read_cursor(0), m_write_cursor(0)
+	{
+		m_buffer.reserve(node_buffer_size);
+	}
 
 	bool empty() const { return m_buffer.empty(); }
 
