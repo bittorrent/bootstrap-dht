@@ -671,8 +671,11 @@ void router_thread(int threadid, udp::socket& sock)
 			b.add_string(our_node_id, 20);
 
 			// This is here for backwards compatibility
-			b.add_string("ip");
-			b.add_string(remote_ip, 4);
+			// except there is a bug in uTorrent where sending this
+			// aborts the bootstrap sequence, causing a 60 second delay
+			// for it to be retried (and succeed the second time)
+//			b.add_string("ip");
+//			b.add_string(remote_ip, 4);
 
 			if (cmd != "ping")
 			{
