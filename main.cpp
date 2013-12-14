@@ -122,16 +122,36 @@ std::atomic<uint64_t> short_tid_pongs;
 std::atomic<uint64_t> invalid_pongs;
 std::atomic<uint64_t> added_nodes;
 
+#ifdef DEBUG_STATS
 std::atomic<uint64_t> queue_time;
+std::atomic<uint32_t> nodebuf_size[4];
+#endif
 
 void print_stats(deadline_timer& stats_timer, error_code const& ec)
 {
 	if (ec) return;
 
-	printf("ping-queue: %" PRId64 "s in: %.1f invalid_enc: %.1f"
-		" invalid_src: %.1f id_failure: %.1f out_ping: %.1f"
-		" short_tid_pong: %.1f invalid_pong: %.1f added: %.1f\n"
+	printf(
+#ifdef DEBUG_STATS
+		"ping-queue: %" PRId64 "m"
+		" node-buf: [%dk %dk %dk %dk]"
+#endif
+
+		" in: %.1f"
+		" invalid_enc: %.1f"
+		" invalid_src: %.1f"
+		" id_failure: %.1f"
+		" out_ping: %.1f"
+		" short_tid_pong: %.1f"
+		" invalid_pong: %.1f"
+		" added: %.1f\n"
+#ifdef DEBUG_STATS
 		, queue_time.load()
+		, nodebuf_size[0].load() / 1000
+		, nodebuf_size[1].load() / 1000
+		, nodebuf_size[2].load() / 1000
+		, nodebuf_size[3].load() / 1000
+#endif
 		, incoming_queries.exchange(0) / float(print_stats_interval)
 		, invalid_encoding.exchange(0) / float(print_stats_interval)
 		, invalid_src_address.exchange(0) / float(print_stats_interval)
@@ -172,7 +192,9 @@ struct queued_node_t
 
 struct ping_queue_t
 {
-	ping_queue_t() : m_queue_time(0) {}
+	ping_queue_t()
+		: m_round_robin(0)
+		, m_queue_time(0) {}
 
 	int queue_time() const { return m_queue_time; }
 
@@ -186,7 +208,7 @@ struct ping_queue_t
 		if (m_queue.empty()) return false;
 		
 		time_point now = steady_clock::now();
-		if (!force && m_queue.front().expire < now)
+		if (!force && m_queue.front().expire > now)
 			return false;
 
 		*out = m_queue.front();
@@ -194,7 +216,7 @@ struct ping_queue_t
 		m_ips.erase(out->ep);
 
 		time_point time_added = out->expire - minutes(15);
-		m_queue_time = duration_cast<std::chrono::seconds>(now - time_added).count();
+		m_queue_time = duration_cast<std::chrono::minutes>(now - time_added).count();
 
 		return true;
 	}
@@ -205,6 +227,14 @@ struct ping_queue_t
 
 		// don't let the queue get too big
 		if (m_queue.size() > ping_queue_size) return;
+
+		// as the size approaches the limit, increasingly reject
+		// new nodes, to distribute nodes we ping more evenly
+		// over time
+		++m_round_robin;
+		m_round_robin &= 0xff;
+		if (m_round_robin < m_queue.size() * 256 / ping_queue_size)
+			return;
 
 		queued_node_t e;
 		e.ep = ep;
@@ -231,6 +261,8 @@ private:
 	// time they were added
 	std::deque<queued_node_t> m_queue;
 
+	mutable int m_round_robin;
+
 	// the number of seconds nodes stay in the queue
 	// before being pinged
 	int m_queue_time;
@@ -247,14 +279,27 @@ struct node_entry_t
 
 struct node_buffer_t
 {
-	node_buffer_t() : m_read_cursor(0), m_write_cursor(0)
+	node_buffer_t()
+		: m_round_robin(0)
+		, m_read_cursor(0)
+		, m_write_cursor(0)
 	{
 		m_buffer.reserve(node_buffer_size);
 	}
 
 	bool empty() const { return m_buffer.empty(); }
 
-	bool need_growth() const { return m_buffer.size() < node_buffer_size; }
+	int size() const { return m_buffer.size(); }
+
+	bool need_growth() const
+	{
+		// return true with diminishing probability as the buffer
+		// fills up. The idea is to spread out the nodes we ping
+		// more evenly over time
+		++m_round_robin;
+		m_round_robin &= 0xff;
+		return m_round_robin >= m_buffer.size() * 256 / node_buffer_size;
+	}
 
 	std::string get_nodes()
 	{
@@ -319,6 +364,7 @@ struct node_buffer_t
 
 private:
 
+	mutable int m_round_robin;
 	int m_read_cursor;
 	int m_write_cursor;
 	std::vector<node_entry_t> m_buffer;
@@ -470,6 +516,10 @@ void router_thread(int threadid, udp::socket& sock)
 		udp::endpoint ep;
 		error_code ec;
 
+#ifdef DEBUG_STATS
+		nodebuf_size[threadid] = node_buffer.size();
+#endif
+
 		// rotate the secrets every 10 minutes
 		steady_clock::time_point now = steady_clock::now();
 		if (last_secret_rotate + minutes(10) < now)
@@ -540,7 +590,10 @@ void router_thread(int threadid, udp::socket& sock)
 			}
 		}
 
+#ifdef DEBUG_STATS
 		queue_time = ping_queue.queue_time();
+#endif
+
 		int len = sock.receive_from(buffer(packet, sizeof(packet)), ep, 0, ec);
 		if (ec)
 		{
