@@ -90,7 +90,7 @@ struct hash<address_v4::bytes_type> : hash<uint32_t>
 	In this circular buffer there are two cursors, one read
 	cursor and one write cursor.
 	When a find_nodes request comes in, we return the next
-	8 nodes (or so) under the read cursor and progresses it.
+	few nodes (or so) under the read cursor and progresses it.
 	
 	We remember the node that asked in a separate queue.
 	At a later time we ping it. If it responds, we
