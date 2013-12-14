@@ -62,6 +62,7 @@ const int print_stats_interval = 60;
 const int nodes_in_response = 16;
 int node_buffer_size = 1000000;
 int ping_queue_size = 1000000;
+bool verify_node_id = true;
 
 #ifdef CLIENTS_STAT
 std::mutex client_mutex;
@@ -754,26 +755,28 @@ void router_thread(int threadid, udp::socket& sock)
 			else if (len <= 0)
 				fprintf(stderr, "send_to failed: return=%d\n", len);
 
-			// verify that the node ID is valid for the source IP
-			char h[20];
-			generate_id(ep.address(), node_id->string_ptr()[19], h);
-			if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+			// filter obvious invalid IPs, and IPv6 (since we only support
+			// IPv4 for now)
+			if (!is_valid_ip(ep)) continue;
+
+			if (verify_node_id)
 			{
-				generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
+				// verify that the node ID is valid for the source IP
+				char h[20];
+				generate_id(ep.address(), node_id->string_ptr()[19], h);
 				if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
 				{
-					++failed_nodeid_queries;
-					continue;
+					generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
+					if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+					{
+						++failed_nodeid_queries;
+						continue;
+					}
 				}
 			}
 
-			// filter obvious invalid IPs, and IPv6 (since we only support
-			// IPv4 for now)
-			if (is_valid_ip(ep))
-			{
-				// ping this node later, we may want to add it to our node buffer
-				ping_queue.insert_node(ep, node_id->string_ptr());
-			}
+			// ping this node later, we may want to add it to our node buffer
+			ping_queue.insert_node(ep, node_id->string_ptr());
 		}
 	}
 }
@@ -792,6 +795,9 @@ void print_usage()
 		"--ping-queue <n>      sets the max number of nodes to keep in\n"
 		"                      the ping queue. Nodes are held in the queue\n"
 		"                      for 15 minutes.\n"
+		"--no-verify-id        disable filtering nodes based on their node ID\n"
+		"                      and external IP (allow any node in on the\n"
+		"                      node list to hand out).\n"
 		"\n"
 		"\n"
 
@@ -862,6 +868,10 @@ int main(int argc, char* argv[])
 				fprintf(stderr, "WARNING: ping queue suspiciously small, using %d\n"
 					, ping_queue_size);
 			}
+		}
+		else if (strcmp(argv[i], "--no-verify-id") == 0)
+		{
+			verify_node_id = false;
 		}
 
 	}

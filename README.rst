@@ -9,7 +9,7 @@ BitTorrent clients can use this server to join the DHT, assuming some number
 of clients are agreeing on using the same server.
 
 The command line options are::
-
+	
 	usage: dht-bootstrap <external-IP> [options]
 	
 	OPTIONS:
@@ -22,6 +22,10 @@ The command line options are::
 	--ping-queue <n>      sets the max number of nodes to keep in
 	                      the ping queue. Nodes are held in the queue
 	                      for 15 minutes.
+	--no-verify-id        disable filtering nodes based on their node ID
+	                      and external IP (allow any node in on the
+	                      node list to hand out).
+
 
 The first argument when launching the server is its own IP. This is not
 only relevant for binding the socket to this interface but is also used when
