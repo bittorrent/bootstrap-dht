@@ -766,6 +766,8 @@ void router_thread(int threadid, udp::socket& sock)
 				generate_id(ep.address(), node_id->string_ptr()[19], h);
 				if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
 				{
+					// This is for backwards compatibility. Once uT 3.5 (or
+					// something) is the most common version, this can be removed
 					generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
 					if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
 					{
