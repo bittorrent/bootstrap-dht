@@ -60,8 +60,8 @@ typedef steady_clock::time_point time_point;
 
 const int print_stats_interval = 60;
 const int nodes_in_response = 16;
-int node_buffer_size = 1000000;
-int ping_queue_size = 1000000;
+int node_buffer_size = 10000000;
+int ping_queue_size = 5000000;
 bool verify_node_id = true;
 
 #ifdef CLIENTS_STAT

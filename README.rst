@@ -35,7 +35,7 @@ The number of threads defaults to the number of CPU cores but can be
 overridden by the ``--threads`` argument.
 
 The number of DHT nodes to keep in the cache of nodes to hand out defaults
-to 1000000 and can be overridden by ``--nodes``. It may not be lower than
+to 10000000 and can be overridden by ``--nodes``. It may not be lower than
 1000.
 
 The ping queue is the max number of nodes allowed in the queue waiting to
@@ -43,8 +43,17 @@ be pinged. Nodes are (ideally) pinged 15 minutes after seen. If too many
 nodes are pinging the dht-bootstrapper to hold them all for 15 minutes
 in the ping buffer, the rate of pinging is throttled to match.
 
-For example, the default of 1000000 nodes in the ping buffer restricts the
-ping rate to (1000000 / 900 = ) 1111 pings per second.
+For example, the default of 5000000 nodes in the ping buffer restricts the
+ping rate to (5000000 / 900 = ) 5555 pings per second. Experience from
+``router.utorrent.com`` suggests that about 45% of pings succeeds and end
+up being added to the node buffer. At the default rate, that means the
+entire node buffer is replaced every 66 minutes. i.e. once you're in the
+node buffer, you'll be handed out to nodes for abut 66 minutes before you
+are replaced by someone else.
+
+The current rate at ``router.utorrent.com`` is about 20000 requests per second.
+Every request returns 16 nodes. That means every node in the node buffer is
+handed out once every (10000000 / 16 / 20000 ~=) 31 seconds.
 
 Only nodes whose node ID match their external IP address (according to this_)
 are pinged.
