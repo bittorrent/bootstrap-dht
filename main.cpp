@@ -583,7 +583,9 @@ void router_thread(int threadid, udp::socket& sock)
 
 			int len = sock.send_to(buffer(response, b.end() - response), n.ep, 0, ec);
 			if (ec) {
-				fprintf(stderr, "PING send_to failed: (%d) %s\n", ec.value(), ec.message().c_str());
+				fprintf(stderr, "PING send_to failed: (%d) %s (%s:%d)\n"
+					, ec.value(), ec.message().c_str()
+					, n.ep.address().to_string(ec).c_str(),n.ep.port());
 			} else if (len <= 0) {
 				fprintf(stderr, "PING send_to failed: return=%d\n", len);
 			} else {
