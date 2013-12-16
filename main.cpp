@@ -694,15 +694,18 @@ void router_thread(int threadid, udp::socket& sock)
 
 //			fprintf(stderr, "got ping response\n");
 
-			// verify that the node ID is valid for the source IP
-			// this shouldn't really fail
-			char h[20];
-			generate_id(ep.address(), node_id->string_ptr()[19], h);
-			if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+			if (verify_node_id)
 			{
-				generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
+				// verify that the node ID is valid for the source IP
+				// this shouldn't really fail
+				char h[20];
+				generate_id(ep.address(), node_id->string_ptr()[19], h);
 				if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
-					continue;
+				{
+					generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
+					if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+						continue;
+				}
 			}
 
 			++added_nodes;
@@ -818,7 +821,7 @@ int main(int argc, char* argv[])
 
 	int num_threads = std::thread::hardware_concurrency();
 
-	for (int i = 1; i < argc; ++i)
+	for (int i = 2; i < argc; ++i)
 	{
 		if (strcmp(argv[i], "--help") == 0)
 		{
