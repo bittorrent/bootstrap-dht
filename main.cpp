@@ -643,12 +643,13 @@ void router_thread(int threadid, udp::socket& sock)
 #endif
 //		printf("R: %s\n", print_entry(e, true).c_str());
 
+		if (e.type() != lazy_entry::dict_t) continue;
+
 		// find the interesting fields from the message.
 		// i.e. the kind of query, the transaction id and the node id
 		std::string transaction_id = e.dict_find_string_value("t");
 		if (transaction_id.empty()) continue;
 
-		if (e.type() != lazy_entry::dict_t) continue;
 		std::string cmd = e.dict_find_string_value("q");
 
 		lazy_entry const* a = e.dict_find_dict("a");
