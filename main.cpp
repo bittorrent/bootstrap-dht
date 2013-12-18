@@ -538,7 +538,7 @@ void router_thread(int threadid, udp::socket& sock)
 				// with threads that may have just grabbed the
 				// pointer to it. It's rotated into the intermediate
 				// slot.
-				uint8_t* old_secret = secret1;
+				uint8_t* old_secret = secret2;
 				secret2 = secret1.load();
 
 				uint8_t* i = intermediate.load();
