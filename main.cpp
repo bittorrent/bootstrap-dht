@@ -406,11 +406,19 @@ bool verify_tid(std::string tid, uint8_t const* secret1, uint8_t const* secret2
 		|| compute_tid(secret2, remote_ip, node_id) == tid;
 }
 
+bool compare_id_prefix(char const* id1, char const* id2)
+{
+	// compare the first 21 bytes
+	if (id1[0] != id2[0] || id1[1] != id2[1]) return false;
+	if ((id1[2] & 0xf8) != (id2[2] & 0xf8)) return false;
+	return true;
+}
+
 void generate_id(address const& ip_, boost::uint32_t r, char* id)
 {
 	boost::uint8_t* ip = 0;
 	
-	const static boost::uint8_t mask[] = { 0x01, 0x07, 0x1f, 0x7f };
+	const static boost::uint8_t mask[] = { 0x03, 0x0f, 0x3f, 0xff };
 
 	address_v4::bytes_type b4;
 	b4 = ip_.to_v4().to_bytes();
@@ -428,10 +436,9 @@ void generate_id(address const& ip_, boost::uint32_t r, char* id)
 
 	id[0] = (c >> 24) & 0xff;
 	id[1] = (c >> 16) & 0xff;
-	id[2] = (c >> 8) & 0xff;
-	id[3] = c & 0xff;
+	id[2] = ((c >> 8) & 0xf8) | (std::rand() & 0x7);
 
-	for (int i = 4; i < 19; ++i) id[i] = std::rand();
+	for (int i = 3; i < 19; ++i) id[i] = std::rand();
 	id[19] = r;
 }
 
@@ -701,8 +708,10 @@ void router_thread(int threadid, udp::socket& sock)
 				// this shouldn't really fail
 				char h[20];
 				generate_id(ep.address(), node_id->string_ptr()[19], h);
-				if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+				if (!compare_id_prefix(node_id->string_ptr(), &h[0]))
 				{
+					// backwards compatibility. We'll save a lot of CPU
+					// once we can remove this
 					generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
 					if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
 						continue;
@@ -770,7 +779,7 @@ void router_thread(int threadid, udp::socket& sock)
 				// verify that the node ID is valid for the source IP
 				char h[20];
 				generate_id(ep.address(), node_id->string_ptr()[19], h);
-				if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+				if (!compare_id_prefix(node_id->string_ptr(), &h[0]))
 				{
 					// This is for backwards compatibility. Once uT 3.5 (or
 					// something) is the most common version, this can be removed
