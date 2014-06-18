@@ -1,14 +1,4 @@
-import modules ;
-
-BOOST_ROOT = [ modules.peek : BOOST_ROOT ] ;
-
-ECHO "BOOST_ROOT =" $(BOOST_ROOT) ;
-
-if $(BOOST_ROOT)
-{
-	use-project /boost : $(BOOST_ROOT) ;
-}
-
+lib boost-system : : <name>boost_system ;
 exe dht-bootstrap
 
 	: # sources
@@ -16,10 +6,10 @@ exe dht-bootstrap
 
 	: # requirements
 	<threading>multi
-	<library>/boost/system
+	<library>boost-system
 	: # default build
 	<link>static
 	<threading>multi
 	: # usage requirements
 	;
-
+install stage : dht-bootstrap : <location>. ;
