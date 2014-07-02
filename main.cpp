@@ -52,6 +52,7 @@ using boost::asio::buffer;
 using std::chrono::steady_clock;
 using std::chrono::minutes;
 using std::chrono::seconds;
+using std::chrono::milliseconds;
 using std::chrono::duration_cast;
 using boost::uuids::detail::sha1;
 using namespace std::placeholders;
@@ -128,9 +129,16 @@ std::atomic<uint64_t> queue_time;
 std::atomic<uint32_t> nodebuf_size[4];
 #endif
 
+time_point stats_start = steady_clock::now();
+
 void print_stats(deadline_timer& stats_timer, error_code const& ec)
 {
 	if (ec) return;
+
+	time_point now = steady_clock::now();
+	float interval = duration_cast<milliseconds>(now - stats_start).count() / 1000.f;
+	if (interval <= 0.f) interval = 0.001f;
+	stats_start = now;
 
 	printf(
 #ifdef DEBUG_STATS
@@ -153,14 +161,14 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 		, nodebuf_size[2].load() / 1000
 		, nodebuf_size[3].load() / 1000
 #endif
-		, incoming_queries.exchange(0) / float(print_stats_interval)
-		, invalid_encoding.exchange(0) / float(print_stats_interval)
-		, invalid_src_address.exchange(0) / float(print_stats_interval)
-		, failed_nodeid_queries.exchange(0) / float(print_stats_interval)
-		, outgoing_pings.exchange(0) / float(print_stats_interval)
-		, short_tid_pongs.exchange(0) / float(print_stats_interval)
-		, invalid_pongs.exchange(0) / float(print_stats_interval)
-		, added_nodes.exchange(0) / float(print_stats_interval)
+		, incoming_queries.exchange(0) / interval
+		, invalid_encoding.exchange(0) / interval
+		, invalid_src_address.exchange(0) / interval
+		, failed_nodeid_queries.exchange(0) / interval
+		, outgoing_pings.exchange(0) / interval
+		, short_tid_pongs.exchange(0) / interval
+		, invalid_pongs.exchange(0) / interval
+		, added_nodes.exchange(0) / interval
 		);
 
 #ifdef CLIENTS_STAT
@@ -808,6 +816,28 @@ void print_usage()
 	);
 }
 
+void signal_handler(error_code const& e, int signo, signal_set& signals
+	, deadline_timer& stats_timer, udp::socket& sock, io_service& ios)
+{
+	error_code ec;
+	if (signo == SIGHUP) {
+
+		stats_timer.cancel();
+		ios.post(std::bind(&print_stats, std::ref(stats_timer), ec));
+
+		signals.async_wait(std::bind(&signal_handler, _1, _2
+			, std::ref(signals), std::ref(stats_timer), std::ref(sock)
+			, std::ref(ios)));
+		return;
+	}
+
+	stats_timer.cancel();
+	sock.close(ec);
+	if (ec)
+		fprintf(stderr, "socket: (%d) %s\n"
+			, ec.value(), ec.message().c_str());
+};
+
 int main(int argc, char* argv[])
 {
 	if (argc < 2)
@@ -901,6 +931,14 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
+	boost::asio::socket_base::reuse_address option(true);
+	sock.set_option(option, ec);
+	if (ec)
+	{
+		fprintf(stderr, "reuse address: (%d) %s\n", ec.value(), ec.message().c_str());
+		return 1;
+	}
+
 	sock.bind(udp::endpoint(our_external_ip, 6881), ec);
 	if (ec)
 	{
@@ -925,17 +963,12 @@ int main(int argc, char* argv[])
 	signal_set signals(ios);
 	signals.add(SIGINT);
 	signals.add(SIGTERM);
+	signals.add(SIGHUP);
 
 	// close the socket when signalled to quit
-	signals.async_wait([&](error_code const& e, int signo)
-	{
-		error_code ec;
-		stats_timer.cancel();
-		sock.close(ec);
-		if (ec)
-			fprintf(stderr, "socket: (%d) %s\n"
-				, ec.value(), ec.message().c_str());
-	});
+	signals.async_wait(std::bind(&signal_handler, _1, _2
+		, std::ref(signals), std::ref(stats_timer), std::ref(sock)
+		, std::ref(ios)));
 
 	std::random_device r;
 	std::mt19937 rand(r());
