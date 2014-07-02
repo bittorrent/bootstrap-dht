@@ -294,6 +294,11 @@ struct node_buffer_t
 
 	bool need_growth() const
 	{
+		// once the buffer is half-full, we're full enough. Don't
+		// go out of our way to put more nodes in (like pinging nodes
+		// immediately)
+		if (m_buffer.size() > node_buffer_size / 2) return false;
+
 		// return true with diminishing probability as the buffer
 		// fills up. The idea is to spread out the nodes we ping
 		// more evenly over time
