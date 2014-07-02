@@ -706,7 +706,6 @@ void router_thread(int threadid, udp::socket& sock)
 			if (verify_node_id)
 			{
 				// verify that the node ID is valid for the source IP
-				// this shouldn't really fail
 				char h[20];
 				generate_id(ep.address(), node_id->string_ptr()[19], h);
 				if (!compare_id_prefix(node_id->string_ptr(), &h[0]))
@@ -774,24 +773,6 @@ void router_thread(int threadid, udp::socket& sock)
 			// filter obvious invalid IPs, and IPv6 (since we only support
 			// IPv4 for now)
 			if (!is_valid_ip(ep)) continue;
-
-			if (verify_node_id)
-			{
-				// verify that the node ID is valid for the source IP
-				char h[20];
-				generate_id(ep.address(), node_id->string_ptr()[19], h);
-				if (!compare_id_prefix(node_id->string_ptr(), &h[0]))
-				{
-					// This is for backwards compatibility. Once uT 3.5 (or
-					// something) is the most common version, this can be removed
-					generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
-					if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
-					{
-						++failed_nodeid_queries;
-						continue;
-					}
-				}
-			}
 
 			// ping this node later, we may want to add it to our node buffer
 			ping_queue.insert_node(ep, node_id->string_ptr());
