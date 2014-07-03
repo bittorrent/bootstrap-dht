@@ -322,7 +322,9 @@ struct node_buffer_t
 		if (m_buffer.size() < nodes_in_response)
 		{
 			ret.resize(m_buffer.size() * sizeof(node_entry_t));
-			memcpy(&ret[0], &m_buffer[0], m_buffer.size() * sizeof(node_entry_t));
+			if (ret.size() > 0)
+				memcpy(&ret[0], &m_buffer[0], m_buffer.size() * sizeof(node_entry_t));
+
 			m_read_cursor = 0;
 			return ret;
 		}
