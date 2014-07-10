@@ -184,6 +184,9 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 	printf("\n");
 	client_histogram.clear();
 #endif
+
+	fflush(stdout);
+
 	stats_timer.expires_from_now(boost::posix_time::seconds(print_stats_interval));
 	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
 }
@@ -729,7 +732,11 @@ void router_thread(int threadid, udp::socket& sock)
 					// once we can remove this
 					generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
 					if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+					{
+						++failed_nodeid_queries;
+
 						continue;
+					}
 				}
 			}
 
