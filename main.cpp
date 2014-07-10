@@ -919,6 +919,11 @@ int main(int argc, char* argv[])
 
 	}
 
+	// each thread has its own ping queue, and node_buffer. Each using
+	// this limit, so divide it by the number of threads
+	ping_queue_size /= num_threads;
+	node_buffer_size /= num_threads;
+
 	static_assert(sizeof(node_entry_t) == 26, "node_entry_t may not contain padding");
 
 	error_code ec;
