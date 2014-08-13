@@ -82,3 +82,7 @@ the boost.system library as well as adding boost to your include path.
 
 To build you need a C++ 11 enabled compiler.
 
+Note that on some Ubuntu systems, it will be far easier to simply install the apt-get package via:
+	sudo apt-get install libboost-system-dev
+The reason for this is that it appears that on some systems, there are some conflicting locations for -lboost_system. The apt-get package is a simple way
+to guarantee a quick and painless build.

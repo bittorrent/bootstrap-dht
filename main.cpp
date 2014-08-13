@@ -22,6 +22,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
 #include <boost/asio.hpp>
+#include <boost/program_options.hpp>
 #include <thread>
 #include <functional>
 #include <deque>
@@ -57,6 +58,8 @@ using std::chrono::duration_cast;
 using boost::uuids::detail::sha1;
 using namespace std::placeholders;
 
+namespace po = boost::program_options;
+
 typedef steady_clock::time_point time_point;
 
 const int print_stats_interval = 60;
@@ -64,6 +67,8 @@ const int nodes_in_response = 16;
 int node_buffer_size = 10000000;
 int ping_queue_size = 5000000;
 bool verify_node_id = true;
+
+int DEFAULT_PORT = 6881;
 
 #ifdef CLIENTS_STAT
 std::mutex client_mutex;
@@ -802,29 +807,6 @@ void router_thread(int threadid, udp::socket& sock)
 	}
 }
 
-void print_usage()
-{
-	fprintf(stderr, "usage: dht-bootstrap <external-IP> [options]\n"
-		"\n"
-		"OPTIONS:\n"
-		"--help                prints this message.\n"
-		"--threads <n>         spawns <n> threads (defaults to the\n"
-		"                      number of hardware cores).\n"
-		"--nodes <n>           sets the number of nodes to keep in\n"
-		"                      the node buffer. Once full, the oldest\n"
-		"                      nodes are replaced as new nodes come in.\n"
-		"--ping-queue <n>      sets the max number of nodes to keep in\n"
-		"                      the ping queue. Nodes are held in the queue\n"
-		"                      for 15 minutes.\n"
-		"--no-verify-id        disable filtering nodes based on their node ID\n"
-		"                      and external IP (allow any node in on the\n"
-		"                      node list to hand out).\n"
-		"\n"
-		"\n"
-
-	);
-}
-
 void signal_handler(error_code const& e, int signo, signal_set& signals
 	, deadline_timer& stats_timer, udp::socket& sock, io_service& ios)
 {
@@ -847,76 +829,121 @@ void signal_handler(error_code const& e, int signo, signal_set& signals
 			, ec.value(), ec.message().c_str());
 };
 
+void print_usage(char const * program_name, po::options_description const &desc) {
+	std::cerr << "Usage: " << program_name << " [options]\n";
+	try {
+		std::cerr << desc << "\n";
+	} catch (const po::error& e) {
+		// program options were malformed
+		std::cerr << "Failed to print program options: " << e.what() << "\n";
+	}
+}
+
 int main(int argc, char* argv[])
 {
-	if (argc < 2)
-	{
-		print_usage();
+	std::string my_ip("");
+	int port = DEFAULT_PORT;
+	int num_threads = std::thread::hardware_concurrency();
+
+	po::options_description desc("Allowed options");
+	po::variables_map vars;
+	desc.add_options()
+		("help,h", "print usage")
+
+		("ip,i", po::value<std::string>(), "set the external ip we are running "
+			"on. This is REQUIRED. All other options are optional.")
+
+		("port,p", po::value<int>()->default_value(DEFAULT_PORT), "sets port "
+			"that we are running the bootstrap on. Defaults to 6881")
+
+		("threads,t", po::value<int>()->default_value(std::thread::hardware_concurrency()),
+			"spawns <n> threads (defaults to the number of hardware cores).")
+
+		("nodes,n", po::value<int>(), "sets the number of nodes to keep in the "
+			"node buffer. Once full, the oldest nodes are replaced as new "
+			"nodes come in.")
+
+		("ping-queue,q", po::value<int>(), "sets the max number of nodes to "
+			"keep in the ping queue. Nodes are held in the queue for 15 minutes.")
+
+		("no-verify-id,v", "disable filtering nodes based on their node ID "
+			"and external IP (allow any node in on the node list to hand out).")
+		;
+	try {
+		po::store(po::parse_command_line(argc, argv, desc), vars);
+	} catch(const std::exception& e) {
+		print_usage(argv[0], desc);
+		return 1;
+	}
+	try {
+		po::notify(vars);
+	} catch (const std::exception& e) {
+		// required arguments missing, if any
+		print_usage(argv[0], desc);
 		return 1;
 	}
 
-	int num_threads = std::thread::hardware_concurrency();
+	if (vars.count("help")) {
+		print_usage(argv[0], desc);
+		return 0;
+	}
 
-	for (int i = 2; i < argc; ++i)
-	{
-		if (strcmp(argv[i], "--help") == 0)
-		{
-			print_usage();
-			return 0;
+	// To run this bootstrap, you MUST provide your external IP
+	if (!var.count("ip")) {
+		fprintf(stderr, "No external IP address specified. You must provide "
+			"an external IP address to run the bootstrap node.\n\n"
+			, ec.message().c_str());
+		print_usage(argv[0], desc);
+		return 1;
+	} else {
+		my_ip = vars["ip"].as<std::string>();
+	}
+
+	if (var.count("port")) {
+		int port = vars["port"].as<int>();
+
+		if (port <= 1023) {
+			port = DEFAULT_PORT;
+			fprintf(stderr, "Nnnope, try again next, jack-o! "
+				"Using the default, %d.\n", port);
 		}
-		else if (strcmp(argv[i], "--threads") == 0)
+	}
+
+	if (var.count("threads")) {
+		num_threads = vars["threads"].as<int>();
+
+		if (num_threads > std::thread::hardware_concurrency())
 		{
-			++i;
-			if (i >= argc)
-			{
-				fprintf(stderr, "--threads expects an integer argument\n");
-				return 1;
-			}
-			num_threads = atoi(argv[i]);
-			if (num_threads > std::thread::hardware_concurrency())
-			{
-				fprintf(stderr, "WARNING: using more threads (%d) than cores (%d)\n"
-					, num_threads, std::thread::hardware_concurrency());
-			}
-			if (num_threads <= 0) num_threads = 1;
-		}
-		else if (strcmp(argv[i], "--nodes") == 0)
-		{
-			++i;
-			if (i >= argc)
-			{
-				fprintf(stderr, "--nodes expects an integer argument\n");
-				return 1;
-			}
-			node_buffer_size = atoi(argv[i]);
-			if (node_buffer_size <= 1000)
-			{
-				node_buffer_size = 1000;
-				fprintf(stderr, "WARNING: node buffer suspiciously small, using %d\n"
-					, node_buffer_size);
-			}
-		}
-		else if (strcmp(argv[i], "--ping-queue") == 0)
-		{
-			++i;
-			if (i >= argc)
-			{
-				fprintf(stderr, "--ping-queue expects an integer argument\n");
-				return 1;
-			}
-			ping_queue_size = atoi(argv[i]);
-			if (ping_queue_size < 10)
-			{
-				ping_queue_size = 10;
-				fprintf(stderr, "WARNING: ping queue suspiciously small, using %d\n"
-					, ping_queue_size);
-			}
-		}
-		else if (strcmp(argv[i], "--no-verify-id") == 0)
-		{
-			verify_node_id = false;
+			fprintf(stderr, "WARNING: using more threads (%d) than cores (%d)\n"
+				, num_threads, std::thread::hardware_concurrency());
 		}
 
+		if (num_threads <= 0) num_threads = 1;
+	}
+
+	if (var.count("nodes")) {
+		node_buffer_size = vars["nodes"].as<int>();
+
+		if (node_buffer_size <= 1000)
+		{
+			node_buffer_size = 1000;
+			fprintf(stderr, "WARNING: node buffer suspiciously small, using %d\n"
+				, node_buffer_size);
+		}
+	}
+
+	if (var.count("ping-queue")) {
+		ping_queue_size = vars["ping-queue"].as<int>();
+		if (ping_queue_size < 10)
+		{
+			ping_queue_size = 10;
+			fprintf(stderr, "WARNING: ping queue suspiciously small, using %d\n"
+				, ping_queue_size);
+		}
+	}
+
+	if (var.count("no-verify-id")) {
+		verify_node_id = false;
 	}
 
 	// each thread has its own ping queue, and node_buffer. Each using
@@ -927,7 +954,7 @@ int main(int argc, char* argv[])
 	static_assert(sizeof(node_entry_t) == 26, "node_entry_t may not contain padding");
 
 	error_code ec;
-	address_v4 our_external_ip = address_v4::from_string(argv[1], ec);
+	address_v4 our_external_ip = address_v4::from_string(my_ip, ec);
 	if (ec)
 	{
 		fprintf(stderr, "invalid external IP address specified: %s\n"
@@ -953,7 +980,7 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	sock.bind(udp::endpoint(our_external_ip, 6881), ec);
+	sock.bind(udp::endpoint(our_external_ip, port), ec);
 	if (ec)
 	{
 		fprintf(stderr, "bind: (%d) %s\n", ec.value(), ec.message().c_str());
@@ -1018,4 +1045,3 @@ int main(int argc, char* argv[])
 
 	return 0;
 }
-
