@@ -10,10 +10,18 @@ of clients are agreeing on using the same server.
 
 The command line options are::
 	
-	usage: dht-bootstrap <external-IP> [options]
+	usage: dht-bootstrap --ip <external-IP> [options]
+	
+	REQUIRED option:
+	-- ip <external-IP>   the server needs to know its own IP. This is not
+                          only relevant for binding the socket to this
+                          interface but is also used when generating its own
+                          DHT node ID.
 	
 	OPTIONS:
 	--help                prints this message.
+	--port <port>         specify the port to run the bootstrap on. Defaults
+	                      to 6881 if nothing is provided.
 	--threads <n>         spawns <n> threads (defaults to the
 	                      number of hardware cores).
 	--nodes <n>           sets the number of nodes to keep in
@@ -25,11 +33,6 @@ The command line options are::
 	--no-verify-id        disable filtering nodes based on their node ID
 	                      and external IP (allow any node in on the
 	                      node list to hand out).
-
-
-The first argument when launching the server is its own IP. This is not
-only relevant for binding the socket to this interface but is also used when
-generating its own DHT node ID.
 
 The number of threads defaults to the number of CPU cores but can be
 overridden by the ``--threads`` argument.
