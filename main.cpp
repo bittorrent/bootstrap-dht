@@ -889,7 +889,7 @@ int main(int argc, char* argv[])
 	}
 
 	// To run this bootstrap, you MUST provide your external IP
-	if (!var.count("ip")) {
+	if (!vars.count("ip")) {
 		fprintf(stderr, "No external IP address specified. You must provide "
 			"an external IP address to run the bootstrap node.\n\n"
 			, ec.message().c_str());
@@ -899,7 +899,7 @@ int main(int argc, char* argv[])
 		my_ip = vars["ip"].as<std::string>();
 	}
 
-	if (var.count("port")) {
+	if (vars.count("port")) {
 		int port = vars["port"].as<int>();
 
 		if (port <= 1023) {
@@ -909,7 +909,7 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	if (var.count("threads")) {
+	if (vars.count("threads")) {
 		num_threads = vars["threads"].as<int>();
 
 		if (num_threads > std::thread::hardware_concurrency())
@@ -921,7 +921,7 @@ int main(int argc, char* argv[])
 		if (num_threads <= 0) num_threads = 1;
 	}
 
-	if (var.count("nodes")) {
+	if (vars.count("nodes")) {
 		node_buffer_size = vars["nodes"].as<int>();
 
 		if (node_buffer_size <= 1000)
@@ -932,7 +932,7 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	if (var.count("ping-queue")) {
+	if (vars.count("ping-queue")) {
 		ping_queue_size = vars["ping-queue"].as<int>();
 		if (ping_queue_size < 10)
 		{
@@ -942,7 +942,7 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	if (var.count("no-verify-id")) {
+	if (vars.count("no-verify-id")) {
 		verify_node_id = false;
 	}
 
