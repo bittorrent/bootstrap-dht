@@ -1,5 +1,6 @@
 lib boost-system : : <target-os>darwin <name>boost_system-mt <search>/opt/local/lib : : <include>/opt/local/include ;
 lib boost-system : : <name>boost_system ;
+lib boost-po : : <name>boost_program_options ;
 
 exe dht-bootstrap
 
@@ -9,6 +10,7 @@ exe dht-bootstrap
 	: # requirements
 	<threading>multi
 	<library>boost-system
+	<library>boost-po
 	: # default build
 	<link>static
 	<threading>multi
