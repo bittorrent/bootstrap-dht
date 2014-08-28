@@ -891,8 +891,7 @@ int main(int argc, char* argv[])
 	// To run this bootstrap, you MUST provide your external IP
 	if (!vars.count("ip")) {
 		fprintf(stderr, "No external IP address specified. You must provide "
-			"an external IP address to run the bootstrap node.\n\n"
-			, ec.message().c_str());
+			"an external IP address to run the bootstrap node.\n\n");
 		print_usage(argv[0], desc);
 		return 1;
 	} else {
