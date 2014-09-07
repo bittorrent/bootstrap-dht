@@ -454,8 +454,8 @@ void generate_id(address const& ip_, boost::uint32_t r, char* id)
 
 	// this is the crc32c (Castagnoli) polynomial
 	boost::crc_optimal<32, 0x1EDC6F41, 0xFFFFFFFF, 0xFFFFFFFF, true, true> crc;
+	ip[0] |= rand << 5;
 	crc.process_block(ip, ip + 4);
-	crc.process_byte(rand);
 	boost::uint32_t c = crc.checksum();
 
 	id[0] = (c >> 24) & 0xff;
