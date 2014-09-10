@@ -521,6 +521,8 @@ std::atomic<uint8_t*> intermediate(nullptr);
 steady_clock::time_point last_secret_rotate;
 std::mutex secret_mutex;
 
+std::array<char, 4> version = {{0, 0, 0, 0}};
+
 void router_thread(int threadid, udp::socket& sock)
 {
 	printf("starting thread %d\n", threadid);
@@ -603,6 +605,13 @@ void router_thread(int threadid, udp::socket& sock)
 
 			b.add_string("t"); b.add_string(transaction_id);
 			b.add_string("q"); b.add_string("ping");
+
+			if (version[0] != 0)
+			{
+				b.add_string("v");
+				b.add_string(version.data(), 4);
+			}
+
 			b.add_string("y"); b.add_string("q");
 
 			b.close_dict();
@@ -781,6 +790,12 @@ void router_thread(int threadid, udp::socket& sock)
 			b.add_string("y");
 			b.add_string("r");
 
+			if (version[0] != 0)
+			{
+				b.add_string("v");
+				b.add_string(version.data(), 4);
+			}
+
 			b.close_dict();
 			++incoming_queries;
 
@@ -819,6 +834,9 @@ void print_usage()
 		"--no-verify-id        disable filtering nodes based on their node ID\n"
 		"                      and external IP (allow any node in on the\n"
 		"                      node list to hand out).\n"
+		"--version <version>   The client version to insert into all outgoing\n"
+		"                      packets. The version format must be 2 characters\n"
+		"                      followed by a dash and an integer.\n"
 		"\n"
 		"\n"
 
@@ -916,7 +934,31 @@ int main(int argc, char* argv[])
 		{
 			verify_node_id = false;
 		}
+		else if (strcmp(argv[i], "--version") == 0)
+		{
+			++i;
+			if (i >= argc)
+			{
+				fprintf(stderr, "--version expects a version argument\n");
+				return 1;
+			}
 
+			if (strlen(argv[i]) < 4
+				|| !std::isprint(argv[i][0])
+				|| !std::isprint(argv[i][1])
+				|| argv[i][2] != '-')
+			{
+				fprintf(stderr, "the version argument is supposed to be CC-N\n"
+					"where C is a printable character and N is any number (may be)\n"
+					"more than one digit\n");
+				return 1;
+			}
+			version[0] = argv[i][0];
+			version[1] = argv[i][1];
+			int version_num = atoi(argv[i] + 3);
+			version[2] = version_num >> 8;
+			version[3] = version_num & 0xff;
+		}
 	}
 
 	// each thread has its own ping queue, and node_buffer. Each using
