@@ -13,7 +13,7 @@ if len(sys.argv) < 3:
 def send_dht_message(msg, target):
 	global s
 	try:
-		print "--> ", target[0]
+		print "--> ", target[0], target[1]
 		s.sendto(bencode(msg), 0, target)
 	except Exception, e:
 		print e
