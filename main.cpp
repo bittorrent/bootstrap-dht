@@ -792,7 +792,13 @@ void router_thread(int threadid, udp::socket& sock)
 				{
 					// fill in with lower quality nodes, since 
 					nodes.resize((num_nodes + last_nodes.size()) * sizeof(node_entry_t));
-					memcpy(&nodes[num_nodes], &last_nodes[0], last_nodes.size() * sizeof(node_entry_t));
+
+					// this is just to be able to copy the entire ringbuffer in
+					// a single call. find the physical start of its buffer
+					node_entry_t* ptr = (std::min)(last_nodes.array_one().first
+						, last_nodes.array_two().first);
+					memcpy(&nodes[num_nodes * sizeof(node_entry_t)]
+						, ptr, last_nodes.size() * sizeof(node_entry_t));
 				}
 				b.add_string(nodes);
 			}
