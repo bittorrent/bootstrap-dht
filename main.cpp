@@ -1,7 +1,9 @@
 /*
 The MIT License (MIT)
 
-Copyright (c) 2013 BitTorrent Inc.
+Copyright (c) 2013-2014 BitTorrent Inc.
+
+author: Arvid Norberg
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
@@ -21,6 +23,15 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+/*
+
+	To further improve scaling down to small networks:
+
+	* scale the number of threads based on the size of the network.
+	  small networks must have just one thread (to consolidate all nodes)
+
+*/
+
 #include <boost/asio.hpp>
 #include <thread>
 #include <functional>
@@ -38,6 +49,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <boost/uuid/sha1.hpp>
 #include <boost/crc.hpp>
 #include <boost/system/error_code.hpp>
+#include <boost/circular_buffer.hpp>
+
 #include "lazy_entry.hpp"
 #include "bencode.hpp"
 
@@ -212,15 +225,12 @@ struct ping_queue_t
 
 	// asks the ping-queue if there is another node that
 	// should be pinged right now. Returns false if not.
-	// force can be used to make the queue disregard what
-	// time it is now. This is used initially when we need
-	// to quickly build a node buffer.
-	bool need_ping(queued_node_t* out, bool force)
+	bool need_ping(queued_node_t* out)
 	{
 		if (m_queue.empty()) return false;
 		
 		time_point now = steady_clock::now();
-		if (!force && m_queue.front().expire > now)
+		if (m_queue.front().expire > now)
 			return false;
 
 		*out = m_queue.front();
@@ -273,7 +283,7 @@ private:
 	// time they were added
 	std::deque<queued_node_t> m_queue;
 
-	mutable int m_round_robin;
+	int m_round_robin;
 
 	// the number of seconds nodes stay in the queue
 	// before being pinged
@@ -292,8 +302,7 @@ struct node_entry_t
 struct node_buffer_t
 {
 	node_buffer_t()
-		: m_round_robin(0)
-		, m_read_cursor(0)
+		: m_read_cursor(0)
 		, m_write_cursor(0)
 	{
 		m_buffer.reserve(node_buffer_size);
@@ -302,21 +311,6 @@ struct node_buffer_t
 	bool empty() const { return m_buffer.empty(); }
 
 	int size() const { return m_buffer.size(); }
-
-	bool need_growth() const
-	{
-		// once the buffer is half-full, we're full enough. Don't
-		// go out of our way to put more nodes in (like pinging nodes
-		// immediately)
-		if (m_buffer.size() > node_buffer_size / 2) return false;
-
-		// return true with diminishing probability as the buffer
-		// fills up. The idea is to spread out the nodes we ping
-		// more evenly over time
-		++m_round_robin;
-		m_round_robin &= 0xff;
-		return m_round_robin >= m_buffer.size() * 256 / node_buffer_size;
-	}
 
 	std::string get_nodes()
 	{
@@ -383,7 +377,6 @@ struct node_buffer_t
 
 private:
 
-	mutable int m_round_robin;
 	int m_read_cursor;
 	int m_write_cursor;
 	std::vector<node_entry_t> m_buffer;
@@ -530,6 +523,11 @@ void router_thread(int threadid, udp::socket& sock)
 	ping_queue_t ping_queue;
 	node_buffer_t node_buffer;
 
+	// always keep the last 16 nodes that have talked to us.
+	// these are used as backups when we don't have enough nodes
+	// in the node buffer
+	boost::circular_buffer<node_entry_t> last_nodes(nodes_in_response);
+
 	std::random_device r;
 	std::mt19937 rand(r());
 	std::uniform_int_distribution<uint8_t> random_byte(0, 0xff);
@@ -578,7 +576,7 @@ void router_thread(int threadid, udp::socket& sock)
 
 		// if we need to ping nodes, do that now
 		queued_node_t n;
-		while (ping_queue.need_ping(&n, node_buffer.need_growth()))
+		while (ping_queue.need_ping(&n))
 		{
 //			fprintf(stderr, "pinging node\n");
 			// build the IP field
@@ -653,7 +651,11 @@ void router_thread(int threadid, udp::socket& sock)
 		}
 
 		// no support for IPv6
-		if (!ep.address().is_v4()) continue;
+		if (!ep.address().is_v4())
+		{
+			++invalid_src_address;
+			continue;
+		}
 
 		using libtorrent::lazy_entry;
 		using libtorrent::lazy_bdecode;
@@ -678,7 +680,11 @@ void router_thread(int threadid, udp::socket& sock)
 #endif
 //		printf("R: %s\n", print_entry(e, true).c_str());
 
-		if (e.type() != lazy_entry::dict_t) continue;
+		if (e.type() != lazy_entry::dict_t)
+		{
+			++invalid_encoding;
+			continue;
+		}
 
 		// find the interesting fields from the message.
 		// i.e. the kind of query, the transaction id and the node id
@@ -743,7 +749,6 @@ void router_thread(int threadid, udp::socket& sock)
 					if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
 					{
 						++failed_nodeid_queries;
-
 						continue;
 					}
 				}
@@ -780,7 +785,16 @@ void router_thread(int threadid, udp::socket& sock)
 			if (cmd != "ping")
 			{
 				b.add_string("nodes");
-				b.add_string(node_buffer.get_nodes());
+				std::string nodes = node_buffer.get_nodes();
+				int num_nodes = nodes.size();
+				if (num_nodes < nodes_in_response * sizeof(node_entry_t)
+					&& last_nodes.size() > 0)
+				{
+					// fill in with lower quality nodes, since 
+					nodes.resize((num_nodes + last_nodes.size()) * sizeof(node_entry_t));
+					memcpy(&nodes[num_nodes], &last_nodes[0], last_nodes.size() * sizeof(node_entry_t));
+				}
+				b.add_string(nodes);
 			}
 			b.close_dict();
 
@@ -810,6 +824,12 @@ void router_thread(int threadid, udp::socket& sock)
 			// filter obvious invalid IPs, and IPv6 (since we only support
 			// IPv4 for now)
 			if (!is_valid_ip(ep)) continue;
+
+			node_entry_t e;
+			e.ip = ep.address().to_v4().to_bytes();
+			e.port = htons(ep.port());
+			memcpy(e.node_id, node_id, 20);
+			last_nodes.push_back(e);
 
 			// ping this node later, we may want to add it to our node buffer
 			ping_queue.insert_node(ep, node_id->string_ptr());
