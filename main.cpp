@@ -252,6 +252,8 @@ struct ping_queue_t
 		m_queue.pop_front();
 		m_ips.erase(out->ep);
 
+		assert(out->ep.address() != address_v4::any());
+
 		time_point time_added = out->expire - minutes(15);
 		m_queue_time = duration_cast<std::chrono::minutes>(now - time_added).count();
 
@@ -260,6 +262,8 @@ struct ping_queue_t
 
 	void insert_node(udp::endpoint const& ep, char const* node_id)
 	{
+		assert(ep.address() != address_v4::any());
+
 		if (m_ips.count(ep)) return;
 
 		// don't let the queue get too big
@@ -361,7 +365,7 @@ struct node_buffer_t
 		m_read_cursor += slice1;
 
 		int slice2 = nodes_in_response - slice1;
-		memcpy(&ret[slice1 * sizeof(node_entry_t)], &m_buffer[m_read_cursor]
+		memcpy(&ret[slice1 * sizeof(node_entry_t)], &m_buffer[0]
 			, sizeof(node_entry_t) * slice2);
 		m_read_cursor = slice2;
 		return ret;
@@ -373,6 +377,9 @@ struct node_buffer_t
 		e.ip = ep.address().to_v4().to_bytes();
 		e.port = htons(ep.port());
 		memcpy(e.node_id, node_id, 20);
+
+		// we're not supposed to add 0.0.0.0
+		assert(ep.address() != address_v4::any());
 
 		// only allow once entry per IP
 		if (m_ips.count(e.ip)) return;
@@ -537,7 +544,8 @@ bool is_valid_ip(udp::endpoint const& ep)
 
 	address_v4 const& addr = ep.address().to_v4();
 	unsigned long ip = addr.to_ulong();
-	if ((ip & 0xff000000) == 0x0a000000 // 10.x.x.x
+	if (ip == 0 // 0.0.0.0
+		|| (ip & 0xff000000) == 0x0a000000 // 10.x.x.x
 		|| (ip & 0xfff00000) == 0xac100000 // 172.16.x.x
 		|| (ip & 0xffff0000) == 0xc0a80000 // 192.168.x.x
 		|| (ip & 0xffff0000) == 0xa9fe0000 // 169.254.x.x
