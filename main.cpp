@@ -136,6 +136,7 @@ std::atomic<uint64_t> outgoing_pings;
 std::atomic<uint64_t> short_tid_pongs;
 std::atomic<uint64_t> invalid_pongs;
 std::atomic<uint64_t> added_nodes;
+std::atomic<uint64_t> backup_nodes_returned;
 
 #ifdef DEBUG_STATS
 std::atomic<uint32_t> nodebuf_size[4];
@@ -182,6 +183,7 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 		" short_tid_pong: %.1f"
 		" invalid_pong: %.1f"
 		" added: %.1f\n"
+		" backup: %.1f\n"
 #ifdef DEBUG_STATS
 		, suffix(nodebuf_size[0].load()).c_str()
 		, suffix(nodebuf_size[1].load()).c_str()
@@ -196,6 +198,7 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 		, short_tid_pongs.exchange(0) / interval
 		, invalid_pongs.exchange(0) / interval
 		, added_nodes.exchange(0) / interval
+		, backup_nodes_returned.exchange(0) / interval
 		);
 
 #ifdef CLIENTS_STAT
@@ -830,6 +833,7 @@ void router_thread(int threadid, udp::socket& sock)
 						, last_nodes.array_two().first);
 					memcpy(&nodes[num_nodes * sizeof(node_entry_t)]
 						, ptr, last_nodes.size() * sizeof(node_entry_t));
+					++backup_nodes_returned;
 				}
 				b.add_string(nodes);
 			}
