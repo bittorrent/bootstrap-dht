@@ -182,7 +182,7 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 		" out_ping: %.1f"
 		" short_tid_pong: %.1f"
 		" invalid_pong: %.1f"
-		" added: %.1f\n"
+		" added: %.1f"
 		" backup: %.1f\n"
 #ifdef DEBUG_STATS
 		, suffix(nodebuf_size[0].load()).c_str()
