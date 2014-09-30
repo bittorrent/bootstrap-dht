@@ -786,9 +786,8 @@ void router_thread(int threadid, udp::socket& sock)
 			{
 				b.add_string("nodes");
 				std::string nodes = node_buffer.get_nodes();
-				int num_nodes = nodes.size();
-				if (num_nodes < nodes_in_response * sizeof(node_entry_t)
-					&& last_nodes.size() > 0)
+				int num_nodes = nodes.size() / sizeof(node_entry_t);
+				if (num_nodes < nodes_in_response && last_nodes.size() > 0)
 				{
 					// fill in with lower quality nodes, since 
 					nodes.resize((num_nodes + last_nodes.size()) * sizeof(node_entry_t));
@@ -831,11 +830,15 @@ void router_thread(int threadid, udp::socket& sock)
 			// IPv4 for now)
 			if (!is_valid_ip(ep)) continue;
 
-			node_entry_t e;
-			e.ip = ep.address().to_v4().to_bytes();
-			e.port = htons(ep.port());
-			memcpy(e.node_id, node_id, 20);
-			last_nodes.push_back(e);
+			// don't add the same IP multiple times in a row
+			if (last_nodes.empty() || last_nodes.back().ip != ep.address().to_v4().to_bytes())
+			{
+				node_entry_t e;
+				e.ip = ep.address().to_v4().to_bytes();
+				e.port = htons(ep.port());
+				memcpy(e.node_id, node_id, 20);
+				last_nodes.push_back(e);
+			}
 
 			// ping this node later, we may want to add it to our node buffer
 			ping_queue.insert_node(ep, node_id->string_ptr());
