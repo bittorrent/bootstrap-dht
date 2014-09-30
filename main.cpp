@@ -138,11 +138,27 @@ std::atomic<uint64_t> invalid_pongs;
 std::atomic<uint64_t> added_nodes;
 
 #ifdef DEBUG_STATS
-std::atomic<uint64_t> queue_time;
 std::atomic<uint32_t> nodebuf_size[4];
 #endif
 
 time_point stats_start = steady_clock::now();
+
+#ifdef DEBUG_STATS
+std::string suffix(int v)
+{
+	int i = 0;
+	char const* suffixes[] = {"", "k", "M", "G"};
+	while (v >= 5000 && i < std::end(suffixes) - std::begin(suffixes) - 1)
+	{
+		v /= 1000;
+		++i;
+	}
+
+	char buf[50];
+	snprintf(buf, sizeof(buf), "%d%s", v, suffixes[i]);
+	return buf;
+}
+#endif
 
 void print_stats(deadline_timer& stats_timer, error_code const& ec)
 {
@@ -155,8 +171,7 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 
 	printf(
 #ifdef DEBUG_STATS
-		"ping-queue: %" PRId64 "m"
-		" node-buf: [%dk %dk %dk %dk]"
+		"node-buf: [%s %s %s %s]"
 #endif
 
 		" in: %.1f"
@@ -168,11 +183,10 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 		" invalid_pong: %.1f"
 		" added: %.1f\n"
 #ifdef DEBUG_STATS
-		, queue_time.load()
-		, nodebuf_size[0].load() / 1000
-		, nodebuf_size[1].load() / 1000
-		, nodebuf_size[2].load() / 1000
-		, nodebuf_size[3].load() / 1000
+		, suffix(nodebuf_size[0].load()).c_str()
+		, suffix(nodebuf_size[1].load()).c_str()
+		, suffix(nodebuf_size[2].load()).c_str()
+		, suffix(nodebuf_size[3].load()).c_str()
 #endif
 		, incoming_queries.exchange(0) / interval
 		, invalid_encoding.exchange(0) / interval
@@ -220,8 +234,6 @@ struct ping_queue_t
 	ping_queue_t()
 		: m_round_robin(0)
 		, m_queue_time(0) {}
-
-	int queue_time() const { return m_queue_time; }
 
 	// asks the ping-queue if there is another node that
 	// should be pinged right now. Returns false if not.
@@ -304,13 +316,15 @@ struct node_buffer_t
 	node_buffer_t()
 		: m_read_cursor(0)
 		, m_write_cursor(0)
+		, m_current_max_size(128)
+		, m_last_write_loop(steady_clock::now())
 	{
 		m_buffer.reserve(node_buffer_size);
 	}
 
 	bool empty() const { return m_buffer.empty(); }
 
-	int size() const { return m_buffer.size(); }
+	int size() const { return m_current_max_size; }
 
 	std::string get_nodes()
 	{
@@ -360,10 +374,22 @@ struct node_buffer_t
 		// only allow once entry per IP
 		if (m_ips.count(e.ip)) return;
 
-		if (m_buffer.size() < node_buffer_size)
+		auto now = steady_clock::now();
+		if (m_write_cursor == m_current_max_size
+			&& m_last_write_loop + minutes(15) > now)
+		{
+			// we're about to wrap the write cursor, but it's been less
+			// than 15 minutes since last time we wrapped, so extend
+			// the buffer
+			m_current_max_size = (std::min)(m_current_max_size * 2, node_buffer_size);
+		}
+
+		if (m_buffer.size() < m_current_max_size)
 		{
 			m_buffer.push_back(e);
 			m_ips.insert(e.ip);
+			m_write_cursor = (m_write_cursor + 1) % m_current_max_size;
+			if (m_write_cursor == 0) m_last_write_loop = now;
 			return;
 		}
 
@@ -373,12 +399,22 @@ struct node_buffer_t
 		// and add the one we just put in
 		m_ips.insert(e.ip);
 		m_write_cursor = (m_write_cursor + 1) % m_buffer.size();
+		if (m_write_cursor == 0) m_last_write_loop = now;
 	}
 
 private:
 
 	int m_read_cursor;
 	int m_write_cursor;
+
+	// the current max size we use for the node buffer. If it's churning too
+	// frequently, we grow it
+	int m_current_max_size;
+
+	// the last time we looped the write cursor. If this is less than 15 minutes
+	// we double the size of the buffer (capped at the specified size)
+	steady_clock::time_point m_last_write_loop;
+
 	std::vector<node_entry_t> m_buffer;
 
 	// this is a set of all IPs that's currently in the buffer. We only allow
@@ -625,10 +661,6 @@ void router_thread(int threadid, udp::socket& sock)
 				++outgoing_pings;
 			}
 		}
-
-#ifdef DEBUG_STATS
-		queue_time = ping_queue.queue_time();
-#endif
 
 		int len = sock.receive_from(buffer(packet, sizeof(packet)), ep, 0, ec);
 		if (ec)
