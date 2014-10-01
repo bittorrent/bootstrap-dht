@@ -31,7 +31,7 @@ def scrape_dht_nodes(query, nodelist):
 
 	tid = random.randint(0, 65536)
 
-	msg = {'a': {'id': node_id}, 'q': query, 'y': 'q', 't': '%d' % tid}
+	msg = {'a': {'id': node_id}, 'q': query, 'y': 'q', 'ro':1, 't': '%d' % tid}
 	if query == 'find_node':
 		msg['a']['target'] = random_key()
 	elif query == 'get_peers':
