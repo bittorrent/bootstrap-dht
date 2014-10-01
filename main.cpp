@@ -803,7 +803,6 @@ void router_thread(int threadid, udp::socket& sock)
 			|| cmd == "get_peers"
 			|| cmd == "get")
 		{
-
 			bencoder b(response, sizeof(response));
 			b.open_dict();
 
@@ -871,6 +870,10 @@ void router_thread(int threadid, udp::socket& sock)
 			// filter obvious invalid IPs, and IPv6 (since we only support
 			// IPv4 for now)
 			if (!is_valid_ip(ep)) continue;
+
+			// don't save read-only nodes
+			lazy_entry const* ro = e.dict_find_int("ro");
+			if (ro && ro->int_value() != 0) continue;
 
 			// don't add the same IP multiple times in a row
 			if (last_nodes.empty() || last_nodes.back().ip != ep.address().to_v4().to_bytes())
