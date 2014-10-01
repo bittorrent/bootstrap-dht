@@ -323,7 +323,7 @@ struct node_buffer_t
 	node_buffer_t()
 		: m_read_cursor(0)
 		, m_write_cursor(0)
-		, m_current_max_size(128)
+		, m_current_max_size(99)
 		, m_last_write_loop(steady_clock::now())
 	{
 		m_buffer.reserve(node_buffer_size);
@@ -394,12 +394,25 @@ struct node_buffer_t
 			m_current_max_size = (std::min)(m_current_max_size * 2, node_buffer_size);
 		}
 
+		// this test must be here even though it's also tested
+		// in the above if-statement. If we try to grow the buffer
+		// size, we may still be stuck at the upper limit, in which
+		// case we still need to wrap
+		if (m_write_cursor == m_current_max_size)
+		{
+#ifdef DEBUG_STATS
+			printf("write cursor wrapping. %d minutes\n"
+				, duration_cast<minutes>(now - m_last_write_loop).count());
+#endif
+			m_write_cursor = 0;
+			m_last_write_loop = now;
+		}
+
 		if (m_buffer.size() < m_current_max_size)
 		{
 			m_buffer.push_back(e);
 			m_ips.insert(e.ip);
-			m_write_cursor = (m_write_cursor + 1) % m_current_max_size;
-			if (m_write_cursor == 0) m_last_write_loop = now;
+			++m_write_cursor;
 			return;
 		}
 
@@ -408,8 +421,7 @@ struct node_buffer_t
 		m_buffer[m_write_cursor] = e;
 		// and add the one we just put in
 		m_ips.insert(e.ip);
-		m_write_cursor = (m_write_cursor + 1) % m_buffer.size();
-		if (m_write_cursor == 0) m_last_write_loop = now;
+		++m_write_cursor;
 	}
 
 private:
