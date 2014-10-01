@@ -435,13 +435,11 @@ private:
 char our_node_id[20];
 
 
-std::string compute_tid(uint8_t const* secret, char const* remote_ip
-	, char const* node_id)
+std::string compute_tid(uint8_t const* secret, char const* remote_ip)
 {
 	sha1 ctx;
 	ctx.process_bytes(secret, 20);
 	ctx.process_bytes(remote_ip, 6);
-	ctx.process_bytes(node_id, 20);
 	uint32_t d[5];
 	ctx.get_digest(d);
 	std::string ret;
@@ -454,13 +452,13 @@ std::string compute_tid(uint8_t const* secret, char const* remote_ip
 }
 
 bool verify_tid(std::string tid, uint8_t const* secret1, uint8_t const* secret2
-	, char const* remote_ip, char const* node_id)
+	, char const* remote_ip)
 {
 	// we use 6 byte transaction IDs
 	if (tid.size() != 4) return false;
 
-	return compute_tid(secret1, remote_ip, node_id) == tid
-		|| compute_tid(secret2, remote_ip, node_id) == tid;
+	return compute_tid(secret1, remote_ip) == tid
+		|| compute_tid(secret2, remote_ip) == tid;
 }
 
 bool compare_id_prefix(char const* id1, char const* id2)
@@ -634,7 +632,7 @@ void router_thread(int threadid, udp::socket& sock)
 			remote_ip[5] = n.ep.port() & 0xff;
 
 			// compute transaction ID
-			std::string transaction_id = compute_tid(secret1, remote_ip, n.node_id);
+			std::string transaction_id = compute_tid(secret1, remote_ip);
 
 			// send the ping to this node
 			bencoder b(response, sizeof(response));
@@ -767,7 +765,7 @@ void router_thread(int threadid, udp::socket& sock)
 			// if the transaction ID doesn't match, we did not send the ping.
 			// ignore it.
 			if (!verify_tid(transaction_id, secret1, secret2
-				, remote_ip, node_id->string_ptr()))
+				, remote_ip))
 			{
 				++invalid_pongs;
 				continue;
