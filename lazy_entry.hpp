@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2012, Arvid Norberg
+Copyright (c) 2003-2014, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -37,6 +37,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <vector>
 #include <string>
 #include <cstring>
+#include <algorithm>
 #include <boost/system/error_code.hpp>
 
 #define TORRENT_EXPORT
@@ -136,6 +137,7 @@ namespace libtorrent
 			none_t, dict_t, list_t, string_t, int_t
 		};
 
+		// internal
 		lazy_entry() : m_begin(0), m_len(0), m_size(0), m_capacity(0), m_type(none_t)
 		{ m_data.start = 0; }
 
@@ -156,7 +158,7 @@ namespace libtorrent
 			m_len = length + 2; // include 'e'
 		}
 
-		// if this is an integer, return the integer value
+		// requires the type to be an integer. return the integer value
 		boost::int64_t int_value() const;
 
 		// internal
@@ -221,6 +223,9 @@ namespace libtorrent
 		lazy_entry* dict_find(char const* name);
 		lazy_entry const* dict_find(char const* name) const
 		{ return const_cast<lazy_entry*>(this)->dict_find(name); }
+		lazy_entry* dict_find(std::string const& name);
+		lazy_entry const* dict_find(std::string const& name) const
+		{ return const_cast<lazy_entry*>(this)->dict_find(name); }
 		lazy_entry const* dict_find_string(char const* name) const;
 
 		// if this is a dictionary, look for a key ``name`` whose value
@@ -235,14 +240,22 @@ namespace libtorrent
 		boost::int64_t dict_find_int_value(char const* name, boost::int64_t default_val = 0) const;
 		lazy_entry const* dict_find_int(char const* name) const;
 
+		// these functions require that ``this`` is a dictionary.
+		// (this->type() == dict_t). They look for an element with the
+		// specified name in the dictionary. ``dict_find_dict`` only
+		// finds dictionaries and ``dict_find_list`` only finds lists.
+		// if no key with the corresponding value of the right type is
+		// found, NULL is returned.
 		lazy_entry const* dict_find_dict(char const* name) const;
+		lazy_entry const* dict_find_dict(std::string const& name) const;
 		lazy_entry const* dict_find_list(char const* name) const;
 
 		// if this is a dictionary, return the key value pair at
 		// position ``i`` from the dictionary.
 		std::pair<std::string, lazy_entry const*> dict_at(int i) const;
 
-		// if this is a dictionary, return the number of items in it
+		// requires that ``this`` is a dictionary. return the
+		// number of items in it
 		int dict_size() const
 		{
 			TORRENT_ASSERT(m_type == dict_t);
@@ -262,7 +275,8 @@ namespace libtorrent
 		// internal
 		lazy_entry* list_append();
 
-		// if this is a list, return the item at index ``i``.
+		// requires that ``this`` is a list. return
+		// the item at index ``i``.
 		lazy_entry* list_at(int i)
 		{
 			TORRENT_ASSERT(m_type == list_t);
@@ -272,8 +286,19 @@ namespace libtorrent
 		lazy_entry const* list_at(int i) const
 		{ return const_cast<lazy_entry*>(this)->list_at(i); }
 
+		// these functions require ``this`` to have the type list.
+		// (this->type() == list_t). ``list_string_value_at`` returns
+		// the string at index ``i``. ``list_pstr_at``
+		// returns a pascal_string of the string value at index ``i``.
+		// if the element at ``i`` is not a string, an empty string
+		// is returned.
 		std::string list_string_value_at(int i) const;
 		pascal_string list_pstr_at(int i) const;
+
+		// this function require ``this`` to have the type list.
+		// (this->type() == list_t). returns the integer value at
+		// index ``i``. If the element at ``i`` is not an integer
+		// ``default_val`` is returned, which defaults to 0.
 		boost::int64_t list_int_value_at(int i, boost::int64_t default_val = 0) const;
 
 		// if this is a list, return the number of items in it.
@@ -283,7 +308,7 @@ namespace libtorrent
 			return int(m_size);
 		}
 
-		// end points one byte passed last byte in the source
+		// internal: end points one byte passed last byte in the source
 		// buffer backing the bencoded structure.
 		void set_end(char const* end)
 		{
@@ -294,7 +319,7 @@ namespace libtorrent
 		// internal
 		void clear();
 
-		// releases ownership of any memory allocated
+		// internal: releases ownership of any memory allocated
 		void release()
 		{
 			m_data.start = 0;
@@ -361,9 +386,12 @@ namespace libtorrent
 		lazy_entry val;
 	};
 
-	TORRENT_EXTRA_EXPORT std::string print_entry(lazy_entry const& e
+	// print the bencoded structure in a human-readable format to a stting
+	// that's returned.
+	TORRENT_EXPORT std::string print_entry(lazy_entry const& e
 		, bool single_line = false, int indent = 0);
 
+	// get the ``error_category`` for bdecode errors
 	TORRENT_EXPORT boost::system::error_category& get_bdecode_category();
 
 	namespace bdecode_errors
@@ -386,17 +414,21 @@ namespace libtorrent
 			depth_exceeded,
 			// bencoded item count limit exceeded
 			limit_exceeded,
+			// integer overflow
+			overflow,
 
 			// the number of error codes
 			error_code_max
 		};
 
 		// hidden
-		inline boost::system::error_code make_error_code(error_code_enum e)
-		{
-			return boost::system::error_code(e, get_bdecode_category());
-		}
+		TORRENT_EXPORT boost::system::error_code make_error_code(error_code_enum e);
 	}
+
+	TORRENT_EXTRA_EXPORT char const* parse_int(char const* start
+		, char const* end, char delimiter, boost::int64_t& val
+		, bdecode_errors::error_code_enum& ec);
+
 }
 
 #endif
