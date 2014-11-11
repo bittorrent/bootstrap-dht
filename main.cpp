@@ -99,14 +99,14 @@ struct hash<address_v4::bytes_type> : hash<uint32_t>
 }
 
 /*
- 
+
 	The way the DHT bootstrapping works is by storing all
 	nodes in one circular buffer of (IP, port, node-id)-triplets.
 	In this circular buffer there are two cursors, one read
 	cursor and one write cursor.
 	When a find_nodes request comes in, we return the next
 	few nodes (or so) under the read cursor and progresses it.
-	
+
 	We remember the node that asked in a separate queue.
 	At a later time we ping it. If it responds, we
 	add it at the write cursor and progresses it.
@@ -125,7 +125,7 @@ struct hash<address_v4::bytes_type> : hash<uint32_t>
 
 
 	[1]: http://libtorrent.org/dht_sec.html
- 
+
  */
 
 std::atomic<uint64_t> incoming_queries;
@@ -243,7 +243,7 @@ struct ping_queue_t
 	bool need_ping(queued_node_t* out)
 	{
 		if (m_queue.empty()) return false;
-		
+
 		time_point now = steady_clock::now();
 		if (m_queue.front().expire > now)
 			return false;
@@ -267,14 +267,14 @@ struct ping_queue_t
 		if (m_ips.count(ep)) return;
 
 		// don't let the queue get too big
-		if (m_queue.size() > ping_queue_size) return;
+		if (int(m_queue.size()) > ping_queue_size) return;
 
 		// as the size approaches the limit, increasingly reject
 		// new nodes, to distribute nodes we ping more evenly
 		// over time
 		++m_round_robin;
 		m_round_robin &= 0xff;
-		if (m_round_robin < m_queue.size() * 256 / ping_queue_size)
+		if (m_round_robin < int(m_queue.size()) * 256 / ping_queue_size)
 			return;
 
 		queued_node_t e;
@@ -349,10 +349,10 @@ struct node_buffer_t
 
 		ret.resize(nodes_in_response * sizeof(node_entry_t));
 
-		if (m_read_cursor == m_buffer.size())
+		if (m_read_cursor == int(m_buffer.size()))
 			m_read_cursor = 0;
-		
-		if (m_read_cursor <= m_buffer.size() - nodes_in_response)
+
+		if (m_read_cursor <= int(m_buffer.size()) - nodes_in_response)
 		{
 			memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_t) * nodes_in_response);
 			m_read_cursor += nodes_in_response;
@@ -370,7 +370,7 @@ struct node_buffer_t
 		m_read_cursor = slice2;
 		return ret;
 	}
-	
+
 	void insert_node(udp::endpoint const& ep, char const* node_id)
 	{
 		node_entry_t e;
@@ -408,7 +408,7 @@ struct node_buffer_t
 			m_last_write_loop = now;
 		}
 
-		if (m_buffer.size() < m_current_max_size)
+		if (int(m_buffer.size()) < m_current_max_size)
 		{
 			m_buffer.push_back(e);
 			m_ips.insert(e.ip);
@@ -484,7 +484,7 @@ bool compare_id_prefix(char const* id1, char const* id2)
 void generate_id(address const& ip_, boost::uint32_t r, char* id)
 {
 	boost::uint8_t* ip = 0;
-	
+
 	const static boost::uint8_t mask[] = { 0x03, 0x0f, 0x3f, 0xff };
 
 	address_v4::bytes_type b4;
@@ -515,7 +515,7 @@ void generate_id(address const& ip_, boost::uint32_t r, char* id)
 void generate_id_sha1(address const& ip_, boost::uint32_t r, char* id)
 {
 	boost::uint8_t* ip = 0;
-	
+
 	const static boost::uint8_t mask[] = { 0x01, 0x07, 0x1f, 0x7f };
 
 	address_v4::bytes_type b4;
@@ -841,7 +841,7 @@ void router_thread(int threadid, udp::socket& sock)
 				int num_nodes = nodes.size() / sizeof(node_entry_t);
 				if (num_nodes < nodes_in_response && last_nodes.size() > 0)
 				{
-					// fill in with lower quality nodes, since 
+					// fill in with lower quality nodes, since
 					nodes.resize((num_nodes + last_nodes.size()) * sizeof(node_entry_t));
 
 					// this is just to be able to copy the entire ringbuffer in
@@ -977,12 +977,15 @@ int main(int argc, char* argv[])
 				return 1;
 			}
 			num_threads = atoi(argv[i]);
-			if (num_threads > std::thread::hardware_concurrency())
+			if (num_threads <= 0)
+			{
+				num_threads = 1;
+			}
+			else if (unsigned(num_threads) > std::thread::hardware_concurrency())
 			{
 				fprintf(stderr, "WARNING: using more threads (%d) than cores (%d)\n"
 					, num_threads, std::thread::hardware_concurrency());
 			}
-			if (num_threads <= 0) num_threads = 1;
 		}
 		else if (strcmp(argv[i], "--nodes") == 0)
 		{
@@ -992,13 +995,14 @@ int main(int argc, char* argv[])
 				fprintf(stderr, "--nodes expects an integer argument\n");
 				return 1;
 			}
-			node_buffer_size = atoi(argv[i]);
-			if (node_buffer_size <= 1000)
+			int size = atoi(argv[i]);
+			if (size <= 1000)
 			{
-				node_buffer_size = 1000;
+				size = 1000;
 				fprintf(stderr, "WARNING: node buffer suspiciously small, using %d\n"
-					, node_buffer_size);
+					, size);
 			}
+			node_buffer_size = size;
 		}
 		else if (strcmp(argv[i], "--ping-queue") == 0)
 		{
@@ -1008,13 +1012,14 @@ int main(int argc, char* argv[])
 				fprintf(stderr, "--ping-queue expects an integer argument\n");
 				return 1;
 			}
-			ping_queue_size = atoi(argv[i]);
-			if (ping_queue_size < 10)
+			int size = atoi(argv[i]);
+			if (size < 10)
 			{
-				ping_queue_size = 10;
+				size = 10;
 				fprintf(stderr, "WARNING: ping queue suspiciously small, using %d\n"
-					, ping_queue_size);
+					, size);
 			}
+			ping_queue_size = size;
 		}
 		else if (strcmp(argv[i], "--no-verify-id") == 0)
 		{
@@ -1087,7 +1092,7 @@ int main(int argc, char* argv[])
 		fprintf(stderr, "bind: (%d) %s\n", ec.value(), ec.message().c_str());
 		return 1;
 	}
-	
+
 	// set send and receive buffers relatively large
 	boost::asio::socket_base::receive_buffer_size recv_size(512 * 1024);
 	sock.set_option(recv_size);

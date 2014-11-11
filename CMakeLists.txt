@@ -5,7 +5,7 @@ set(CMAKE_MODULE_PATH
     ${CMAKE_MODULE_PATH}
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules/)
 
-set(CMAKE_CXX_FLAGS "-std=c++11 -Wall -Werror -Wno-error=sign-compare ${CMAKE_CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS "-std=c++11 -Wall -Werror ${CMAKE_CXX_FLAGS}")
 
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(Threads REQUIRED)
