@@ -9,9 +9,9 @@ BitTorrent clients can use this server to join the DHT, assuming some number
 of clients are agreeing on using the same server.
 
 The command line options are::
-	
+
 	usage: dht-bootstrap <external-IP> [options]
-	
+
 	OPTIONS:
 	--help                prints this message.
 	--threads <n>         spawns <n> threads (defaults to the
@@ -82,3 +82,9 @@ the boost.system library as well as adding boost to your include path.
 
 To build you need a C++ 11 enabled compiler.
 
+acknowledgments
+---------------
+Thanks to following people who have contributed code or discovered
+bugs in bootstrap-dht:
+
+Team_LPJ@BoB working with Zero Day Initiative (ZDI)
