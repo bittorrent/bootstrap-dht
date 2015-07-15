@@ -35,6 +35,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
 
+#ifndef BOOST_SYSTEM_NOEXCEPT
+	#define BOOST_SYSTEM_NOEXCEPT BOOST_NOEXCEPT
+#endif
+
 namespace
 {
 	const int lazy_entry_grow_factor = 150; // percent
