@@ -417,7 +417,7 @@ namespace libtorrent
 		for (int i = 0; i < int(m_size); ++i)
 		{
 			lazy_dict_entry& e = m_data.dict[i];
-			if (name.size() != e.val.m_begin - e.name) continue;
+			if (int(name.size()) != e.val.m_begin - e.name) continue;
 			if (std::equal(name.begin(), name.end(), e.name))
 				return &e.val;
 		}
@@ -537,7 +537,7 @@ namespace libtorrent
 			line_len += 4;
 			break;
 		}
-	
+
 		if (line_len > limit) return -1;
 		return line_len;
 	}
