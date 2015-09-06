@@ -58,6 +58,7 @@ using boost::asio::signal_set;
 using boost::asio::io_service;
 using boost::asio::ip::udp;
 using boost::asio::ip::address_v4;
+using boost::asio::ip::address_v6;
 using boost::asio::ip::address;
 using boost::asio::deadline_timer;
 using boost::system::error_code;
@@ -75,6 +76,7 @@ typedef steady_clock::time_point time_point;
 typedef std::array<char, 20> node_id_type;
 
 const int print_stats_interval = 60;
+const int rotate_secrets_interval = 600;
 const int nodes_in_response = 16;
 int node_buffer_size = 10000000;
 int ping_queue_size = 5000000;
@@ -94,6 +96,19 @@ struct hash<address_v4::bytes_type> : hash<uint32_t>
 	{
 		uint32_t arg;
 		std::memcpy(&arg, &ip[0], 4);
+		return this->hash<uint32_t>::operator()(arg);
+	}
+};
+
+template <>
+struct hash<address_v6::bytes_type> : hash<uint32_t>
+{
+	size_t operator()(address_v6::bytes_type ip) const
+	{
+		// this is the crc32c (Castagnoli) polynomial
+		boost::crc_optimal<32, 0x1EDC6F41, 0xFFFFFFFF, 0xFFFFFFFF, true, true> crc;
+		crc.process_block(ip.data(), ip.data() + ip.size());
+		uint32_t arg = crc.checksum();
 		return this->hash<uint32_t>::operator()(arg);
 	}
 };
@@ -223,12 +238,158 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
 }
 
+bool compare_id_prefix(char const* id1, char const* id2)
+{
+	// compare the first 21 bits
+	if (id1[0] != id2[0] || id1[1] != id2[1]) return false;
+	if ((id1[2] & 0xf8) != (id2[2] & 0xf8)) return false;
+	return true;
+}
+
+void generate_id(address const& ip_, uint32_t r, char* id)
+{
+	uint8_t ip[8] = { 0 };
+	int ip_len = 0;
+
+	if (ip_.is_v4())
+	{
+		const static uint8_t mask[] = { 0x03, 0x0f, 0x3f, 0xff };
+
+		address_v4::bytes_type b4;
+		b4 = ip_.to_v4().to_bytes();
+
+		for (int i = 0; i < 4; ++i)
+			ip[i] = b4[i] & mask[i];
+
+		ip_len = 4;
+	}
+	else
+	{
+		const static uint8_t mask[] = { 0x01, 0x03, 0x07, 0x0f, 0x1f, 0x3f, 0x7f, 0xff };
+
+		address_v6::bytes_type b6;
+		b6 = ip_.to_v6().to_bytes();
+
+		for (int i = 0; i < 8; ++i)
+			ip[i] = b6[i] & mask[i];
+
+		ip_len = 8;
+	}
+
+	uint8_t rand = r & 0x7;
+	ip[0] |= rand << 5;
+
+	// this is the crc32c (Castagnoli) polynomial
+	boost::crc_optimal<32, 0x1EDC6F41, 0xFFFFFFFF, 0xFFFFFFFF, true, true> crc;
+	crc.process_block(ip, ip + ip_len);
+	uint32_t c = crc.checksum();
+
+	id[0] = (c >> 24) & 0xff;
+	id[1] = (c >> 16) & 0xff;
+	id[2] = ((c >> 8) & 0xf8) | (std::rand() & 0x7);
+
+	for (int i = 3; i < 19; ++i) id[i] = std::rand();
+	id[19] = r;
+}
+
+// this is here for backwards compatibility with the first version
+// of the node ID scheme, which uses sha1 instead of crc32
+void generate_id_sha1(address const& ip_, boost::uint32_t r, char* id)
+{
+	boost::uint8_t* ip = 0;
+
+	const static boost::uint8_t mask[] = { 0x01, 0x07, 0x1f, 0x7f };
+
+	address_v4::bytes_type b4;
+	b4 = ip_.to_v4().to_bytes();
+	ip = &b4[0];
+
+	for (int i = 0; i < 4; ++i)
+		ip[i] &= mask[i];
+
+	boost::uint8_t rand = r & 0x7;
+
+	// boost's sha1 returns uint32_t's in
+	// host endian. We need to turn it into
+	// big endian.
+	sha1 ctx;
+	ctx.process_bytes(ip, 4);
+	ctx.process_byte(rand);
+	uint32_t d[5];
+	ctx.get_digest(d);
+
+	id[0] = (d[0] >> 24) & 0xff;
+	id[1] = (d[0] >> 16) & 0xff;
+	id[2] = (d[0] >> 8) & 0xff;
+	id[3] = d[0] & 0xff;
+
+	for (int i = 4; i < 19; ++i) id[i] = std::rand();
+	id[19] = r;
+}
+
+struct bound_socket
+{
+	bound_socket(io_service& ios, udp::endpoint ep)
+		: sock(ios)
+	{
+		error_code ec;
+		sock.open(ep.protocol());
+		if (ec)
+		{
+			fprintf(stderr, "socket [%s:%hu]: (%d) %s\n", ep.address().to_string().c_str(), ep.port()
+				, ec.value(), ec.message().c_str());
+			throw boost::system::system_error(ec);
+		}
+
+		{
+			boost::asio::socket_base::reuse_address option(true);
+			sock.set_option(option);
+		}
+
+#if defined(SO_REUSEPORT)
+		{
+			boost::asio::detail::socket_option::boolean<SOL_SOCKET, SO_REUSEPORT> option(true);
+			sock.set_option(option);
+		}
+#endif
+
+#if defined(IPPROTO_IPV6) && defined(IPV6_V6ONLY)
+		if (ep.address().is_v6())
+		{
+			boost::asio::detail::socket_option::boolean<IPPROTO_IPV6, IPV6_V6ONLY> option(true);
+			sock.set_option(option);
+		}
+#endif
+
+		sock.bind(ep, ec);
+		if (ec)
+		{
+			fprintf(stderr, "bind [%s:%hu]: (%d) %s\n", ep.address().to_string().c_str(), ep.port()
+				, ec.value(), ec.message().c_str());
+			throw boost::system::system_error(ec);
+		}
+
+		// set send and receive buffers relatively large
+		boost::asio::socket_base::receive_buffer_size recv_size(256 * 1024);
+		sock.set_option(recv_size);
+		boost::asio::socket_base::send_buffer_size send_size(256 * 1024);
+		sock.set_option(send_size);
+
+		generate_id(ep.address(), std::rand(), node_id.data());
+	}
+
+	udp::socket sock;
+	node_id_type node_id;
+};
+
 // this is the type of each node queued up
 // to be pinged at some point in the future
 struct queued_node_t
 {
 	udp::endpoint ep;
 	node_id_type node_id;
+	// the socket this node was seen on
+	bound_socket* incoming_socket;
 
 	// the time when this node should be pinged
 	time_point expire;
@@ -262,7 +423,8 @@ struct ping_queue_t
 		return true;
 	}
 
-	void insert_node(udp::endpoint const& ep, char const* node_id)
+	void insert_node(udp::endpoint const& ep, char const* node_id
+		, bound_socket& incoming_socket)
 	{
 		assert(ep.address() != address_v4::any());
 
@@ -282,6 +444,7 @@ struct ping_queue_t
 		queued_node_t e;
 		e.ep = ep;
 		memcpy(e.node_id.data(), node_id, e.node_id.size());
+		e.incoming_socket = &incoming_socket;
 		// we primarily want to keep quality nodes in our list.
 		// in 10 minutes, any pin-hole the node may have had open to
 		// us is likely to have been closed. If the node responds
@@ -313,15 +476,23 @@ private:
 
 // this is the type of each node entry
 // in the circular buffer
+template <typename Address>
 struct node_entry_t
 {
 	node_id_type node_id;
-	address_v4::bytes_type ip;
+	typename Address::bytes_type ip;
 	uint16_t port;
 };
 
+typedef node_entry_t<address_v4> node_entry_v4;
+typedef node_entry_t<address_v6> node_entry_v6;
+
+template <typename Address>
 struct node_buffer_t
 {
+	typedef Address address_type;
+	typedef node_entry_t<address_type> node_entry_type;
+
 	node_buffer_t()
 		: m_read_cursor(0)
 		, m_write_cursor(0)
@@ -341,47 +512,47 @@ struct node_buffer_t
 
 		if (m_buffer.size() < nodes_in_response)
 		{
-			ret.resize(m_buffer.size() * sizeof(node_entry_t));
+			ret.resize(m_buffer.size() * sizeof(node_entry_type));
 			if (ret.size() > 0)
-				memcpy(&ret[0], &m_buffer[0], m_buffer.size() * sizeof(node_entry_t));
+				memcpy(&ret[0], &m_buffer[0], m_buffer.size() * sizeof(node_entry_type));
 
 			m_read_cursor = 0;
 			return ret;
 		}
 
-		ret.resize(nodes_in_response * sizeof(node_entry_t));
+		ret.resize(nodes_in_response * sizeof(node_entry_type));
 
 		if (m_read_cursor == m_buffer.size())
 			m_read_cursor = 0;
 		
 		if (m_read_cursor <= m_buffer.size() - nodes_in_response)
 		{
-			memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_t) * nodes_in_response);
+			memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_type) * nodes_in_response);
 			m_read_cursor += nodes_in_response;
 			return ret;
 		}
 
 		int slice1 = m_buffer.size() - m_read_cursor;
 		assert(slice1 < nodes_in_response);
-		memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_t) * slice1);
+		memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_type) * slice1);
 		m_read_cursor += slice1;
 
 		int slice2 = nodes_in_response - slice1;
-		memcpy(&ret[slice1 * sizeof(node_entry_t)], &m_buffer[0]
-			, sizeof(node_entry_t) * slice2);
+		memcpy(&ret[slice1 * sizeof(node_entry_type)], &m_buffer[0]
+			, sizeof(node_entry_type) * slice2);
 		m_read_cursor = slice2;
 		return ret;
 	}
 	
-	void insert_node(udp::endpoint const& ep, char const* node_id)
+	void insert_node(address_type const& addr, uint16_t port, char const* node_id)
 	{
-		node_entry_t e;
-		e.ip = ep.address().to_v4().to_bytes();
-		e.port = htons(ep.port());
+		node_entry_type e;
+		e.ip = addr.to_bytes();
+		e.port = htons(port);
 		memcpy(e.node_id.data(), node_id, e.node_id.size());
 
 		// we're not supposed to add 0.0.0.0
-		assert(ep.address() != address_v4::any());
+		assert(!addr.is_unspecified());
 
 		// only allow once entry per IP
 		if (m_ips.count(e.ip)) return;
@@ -439,21 +610,21 @@ private:
 	// we double the size of the buffer (capped at the specified size)
 	steady_clock::time_point m_last_write_loop;
 
-	std::vector<node_entry_t> m_buffer;
+	std::vector<node_entry_type> m_buffer;
 
 	// this is a set of all IPs that's currently in the buffer. We only allow
 	// one instance of each IP
-	std::unordered_set<address_v4::bytes_type> m_ips;
+	std::unordered_set<typename address_type::bytes_type> m_ips;
 };
 
-node_id_type our_node_id;
+typedef node_buffer_t<address_v4> node_buffer_v4;
+typedef node_buffer_t<address_v6> node_buffer_v6;
 
-
-std::string compute_tid(uint8_t const* secret, char const* remote_ip)
+std::string compute_tid(uint8_t const* secret, char const* remote_ip, size_t ip_len)
 {
 	sha1 ctx;
 	ctx.process_bytes(secret, 20);
-	ctx.process_bytes(remote_ip, 6);
+	ctx.process_bytes(remote_ip, ip_len);
 	uint32_t d[5];
 	ctx.get_digest(d);
 	std::string ret;
@@ -466,85 +637,13 @@ std::string compute_tid(uint8_t const* secret, char const* remote_ip)
 }
 
 bool verify_tid(std::string tid, uint8_t const* secret1, uint8_t const* secret2
-	, char const* remote_ip)
+	, char const* remote_ip, size_t ip_len)
 {
 	// we use 6 byte transaction IDs
 	if (tid.size() != 4) return false;
 
-	return compute_tid(secret1, remote_ip) == tid
-		|| compute_tid(secret2, remote_ip) == tid;
-}
-
-bool compare_id_prefix(char const* id1, char const* id2)
-{
-	// compare the first 21 bytes
-	if (id1[0] != id2[0] || id1[1] != id2[1]) return false;
-	if ((id1[2] & 0xf8) != (id2[2] & 0xf8)) return false;
-	return true;
-}
-
-void generate_id(address const& ip_, boost::uint32_t r, char* id)
-{
-	boost::uint8_t* ip = 0;
-	
-	const static boost::uint8_t mask[] = { 0x03, 0x0f, 0x3f, 0xff };
-
-	address_v4::bytes_type b4;
-	b4 = ip_.to_v4().to_bytes();
-	ip = &b4[0];
-
-	for (int i = 0; i < 4; ++i)
-		ip[i] &= mask[i];
-
-	boost::uint8_t rand = r & 0x7;
-
-	// this is the crc32c (Castagnoli) polynomial
-	boost::crc_optimal<32, 0x1EDC6F41, 0xFFFFFFFF, 0xFFFFFFFF, true, true> crc;
-	ip[0] |= rand << 5;
-	crc.process_block(ip, ip + 4);
-	boost::uint32_t c = crc.checksum();
-
-	id[0] = (c >> 24) & 0xff;
-	id[1] = (c >> 16) & 0xff;
-	id[2] = ((c >> 8) & 0xf8) | (std::rand() & 0x7);
-
-	for (int i = 3; i < 19; ++i) id[i] = std::rand();
-	id[19] = r;
-}
-
-// this is here for backwards compatibility with the first version
-// of the node ID scheme, which uses sha1 instead of crc32
-void generate_id_sha1(address const& ip_, boost::uint32_t r, char* id)
-{
-	boost::uint8_t* ip = 0;
-	
-	const static boost::uint8_t mask[] = { 0x01, 0x07, 0x1f, 0x7f };
-
-	address_v4::bytes_type b4;
-	b4 = ip_.to_v4().to_bytes();
-	ip = &b4[0];
-
-	for (int i = 0; i < 4; ++i)
-		ip[i] &= mask[i];
-
-	boost::uint8_t rand = r & 0x7;
-
-	// boost's sha1 returns uint32_t's in
-	// host endian. We need to turn it into
-	// big endian.
-	sha1 ctx;
-	ctx.process_bytes(ip, 4);
-	ctx.process_byte(rand);
-	uint32_t d[5];
-	ctx.get_digest(d);
-
-	id[0] = (d[0] >> 24) & 0xff;
-	id[1] = (d[0] >> 16) & 0xff;
-	id[2] = (d[0] >> 8) & 0xff;
-	id[3] = d[0] & 0xff;
-
-	for (int i = 4; i < 19; ++i) id[i] = std::rand();
-	id[19] = r;
+	return compute_tid(secret1, remote_ip, ip_len) == tid
+		|| compute_tid(secret2, remote_ip, ip_len) == tid;
 }
 
 // determines if an IP is valid to be pinged for
@@ -552,17 +651,31 @@ void generate_id_sha1(address const& ip_, boost::uint32_t r, char* id)
 bool is_valid_ip(udp::endpoint const& ep)
 {
 	if (ep.port() == 0) return false;
-	if (!ep.address().is_v4()) return false;
+	if (ep.protocol() == udp::v4())
+	{
+		address_v4 const& addr = ep.address().to_v4();
+		unsigned long ip = addr.to_ulong();
+		if (ip == 0 // 0.0.0.0
+			|| (ip & 0xff000000) == 0x0a000000 // 10.x.x.x
+			|| (ip & 0xfff00000) == 0xac100000 // 172.16.x.x
+			|| (ip & 0xffff0000) == 0xc0a80000 // 192.168.x.x
+			|| (ip & 0xffff0000) == 0xa9fe0000 // 169.254.x.x
+			|| (ip & 0xff000000) == 0x7f000000) // 127.x.x.x
+			return false;
+	}
+	else
+	{
+		address_v6 const& addr = ep.address().to_v6();
+		if (addr.is_link_local() || addr.is_loopback()
+			|| addr.is_multicast() || addr.is_unspecified()
+			|| addr.is_site_local() || addr.is_v4_compatible()
+			|| addr.is_v4_mapped())
+			return false;
 
-	address_v4 const& addr = ep.address().to_v4();
-	unsigned long ip = addr.to_ulong();
-	if (ip == 0 // 0.0.0.0
-		|| (ip & 0xff000000) == 0x0a000000 // 10.x.x.x
-		|| (ip & 0xfff00000) == 0xac100000 // 172.16.x.x
-		|| (ip & 0xffff0000) == 0xc0a80000 // 192.168.x.x
-		|| (ip & 0xffff0000) == 0xa9fe0000 // 169.254.x.x
-		|| (ip & 0xff000000) == 0x7f000000) // 127.x.x.x
-		return false;
+		address_v6::bytes_type ip = addr.to_bytes();
+		if ((ip[0] & 0xfe) == 0xfc) // unique local address, fc00::/7
+			return false;
+	}
 
 	return true;
 }
@@ -570,157 +683,221 @@ bool is_valid_ip(udp::endpoint const& ep)
 std::atomic<uint8_t*> secret1(nullptr);
 std::atomic<uint8_t*> secret2(nullptr);
 std::atomic<uint8_t*> intermediate(nullptr);
-steady_clock::time_point last_secret_rotate;
-std::mutex secret_mutex;
 
-std::array<char, 4> version = {{0, 0, 0, 0}};
-
-void router_thread(int threadid, udp::socket& sock)
+void rotate_secrets(deadline_timer& secrets_timer, std::random_device& r, error_code const& ec)
 {
-	printf("starting thread %d\n", threadid);
+	if (ec) return;
 
-	ping_queue_t ping_queue;
-	node_buffer_t node_buffer;
-
-	// always keep the last 16 nodes that have talked to us.
-	// these are used as backups when we don't have enough nodes
-	// in the node buffer
-	boost::circular_buffer<node_entry_t> last_nodes(nodes_in_response);
-
-	std::random_device r;
 	std::mt19937 rand(r());
 	std::uniform_int_distribution<uint8_t> random_byte(0, 0xff);
 
-	// the incoming packet
-	char packet[1500];
+	// there are three buffers in total and two of
+	// them are exposed via secret1 and secret2 at
+	// any given time. The old_secret needs to be
+	// kept around for a bit to avoid race conditions
+	// with threads that may have just grabbed the
+	// pointer to it. It's rotated into the intermediate
+	// slot.
+	uint8_t* old_secret = secret2;
+	secret2 = secret1.load();
 
-	// the response packet
-	char response[1500];
+	uint8_t* i = intermediate.load();
+	std::generate(i, i + 20, [&]() { return random_byte(rand); });
+	secret1 = i;
+	intermediate = old_secret;
 
-	for (;;)
+	secrets_timer.expires_from_now(boost::posix_time::seconds(rotate_secrets_interval));
+	secrets_timer.async_wait(std::bind(&rotate_secrets, std::ref(secrets_timer), std::ref(r), _1));
+}
+
+size_t build_ip_field(udp::endpoint ep, char* remote_ip)
+{
+	if (ep.protocol() == udp::v4())
 	{
-		udp::endpoint ep;
-		error_code ec;
+		address_v4::bytes_type ip = ep.address().to_v4().to_bytes();
+		memcpy(remote_ip, ip.data(), ip.size());
+		remote_ip[ip.size()] = (ep.port() >> 8) & 0xff;
+		remote_ip[ip.size() + 1] = ep.port() & 0xff;
+		return ip.size() + 2;
+	}
+	else
+	{
+		address_v6::bytes_type ip = ep.address().to_v6().to_bytes();
+		memcpy(remote_ip, ip.data(), ip.size());
+		remote_ip[ip.size()] = (ep.port() >> 8) & 0xff;
+		remote_ip[ip.size() + 1] = ep.port() & 0xff;
+		return ip.size() + 2;
+	}
+}
+
+std::array<char, 4> version = {{0, 0, 0, 0}};
+
+struct router_thread
+{
+	router_thread(std::vector<address> addrs)
+		: signals(ios)
+	{
+		for (address a : addrs)
+		{
+			socks.emplace_back(ios, udp::endpoint(a, 6881));
+		}
+
+		signals.add(SIGINT);
+		signals.add(SIGTERM);
+
+		// close the sockets and stop the io service when signalled to quit
+		signals.async_wait(std::bind(&router_thread::signal_handler, this, _1, _2));
+	}
+
+	void signal_handler(error_code const& e, int /*signo*/)
+	{
+		for (bound_socket& sock : socks)
+		{
+			error_code ec;
+			sock.sock.close(ec);
+			if (ec)
+				fprintf(stderr, "socket: (%d) %s\n"
+					, ec.value(), ec.message().c_str());
+		}
+		ios.stop();
+	}
+
+	void start(int threadid)
+	{
+		if (socks.empty())
+		{
+			fprintf(stderr, "no interfaces to receive on\n");
+			return;
+		}
+
+		this->threadid = threadid;
+		printf("starting thread %d\n", threadid);
+
+		for (bound_socket& sock : socks)
+		{
+			sock.sock.async_receive_from(buffer(packet, sizeof(packet)), ep
+				, std::bind(&router_thread::packet_received, this, std::ref(sock), _1, _2));
+		}
+
+		for (;;)
+		{
+			error_code ec;
 
 #ifdef DEBUG_STATS
-		nodebuf_size[threadid] = node_buffer.size();
+			nodebuf_size[threadid] = node_buffer.size();
 #endif
 
-		// rotate the secrets every 10 minutes
-		steady_clock::time_point now = steady_clock::now();
-		if (last_secret_rotate + minutes(10) < now)
-		{
-			std::lock_guard<std::mutex> l(secret_mutex);
-			if (last_secret_rotate + minutes(10) < now)
+			// if we need to ping nodes, do that now
+			queued_node_t n;
+			while (ping_queue.need_ping(&n))
 			{
-				last_secret_rotate = now;
+				//			fprintf(stderr, "pinging node\n");
+				char remote_ip[18];
+				size_t remote_ip_len = build_ip_field(n.ep, remote_ip);
+				std::string transaction_id = compute_tid(secret1, remote_ip, remote_ip_len);
 
-				rand.seed(r());
-				// there are three buffers in total and two of
-				// them are exposed via secret1 and secret2 at
-				// any given time. The old_secret needs to be
-				// kept around for a bit to avoid race conditions
-				// with threads that may have just grabbed the
-				// pointer to it. It's rotated into the intermediate
-				// slot.
-				uint8_t* old_secret = secret2;
-				secret2 = secret1.load();
+				// send the ping to this node
+				bencoder b(response, sizeof(response));
+				b.open_dict();
 
-				uint8_t* i = intermediate.load();
-				std::generate(i, i + 20, [&](){ return random_byte(rand);});
-				secret1 = i;
-				intermediate = old_secret;
+				b.add_string("ip"); b.add_string(remote_ip, remote_ip_len);
+
+				// args dict
+				b.add_string("a");
+				b.open_dict();
+				b.add_string("id"); b.add_string(n.incoming_socket->node_id.data()
+					, n.incoming_socket->node_id.size());
+				b.close_dict();
+
+				b.add_string("t"); b.add_string(transaction_id);
+				b.add_string("q"); b.add_string("ping");
+
+				if (version[0] != 0)
+				{
+					b.add_string("v");
+					b.add_string(version.data(), 4);
+				}
+
+				b.add_string("y"); b.add_string("q");
+
+				b.close_dict();
+
+				int len = n.incoming_socket->sock.send_to(buffer(response, b.end() - response), n.ep, 0, ec);
+				if (ec) {
+					fprintf(stderr, "PING send_to failed: (%d) %s (%s:%d)\n"
+							, ec.value(), ec.message().c_str()
+							, n.ep.address().to_string(ec).c_str(), n.ep.port());
+				}
+				else if (len <= 0) {
+					fprintf(stderr, "PING send_to failed: return=%d\n", len);
+				}
+				else {
+					++outgoing_pings;
+				}
+			}
+
+			size_t executed = ios.run_one(ec);
+
+			if (ec)
+			{
+				fprintf(stderr, "error in io service: (%d) %s\n", ec.value(), ec.message().c_str());
+				break;
+			}
+
+			if (!executed)
+			{
+				fprintf(stderr, "thread %d stopped\n", threadid);
+				break;
 			}
 		}
+	}
 
-		// if we need to ping nodes, do that now
-		queued_node_t n;
-		while (ping_queue.need_ping(&n))
-		{
-//			fprintf(stderr, "pinging node\n");
-			// build the IP field
-			char remote_ip[6];
-			address_v4::bytes_type ip = n.ep.address().to_v4().to_bytes();
-			memcpy(remote_ip, &ip[0], 4);
-			remote_ip[4] = (n.ep.port() >> 8) & 0xff;
-			remote_ip[5] = n.ep.port() & 0xff;
-
-			// compute transaction ID
-			std::string transaction_id = compute_tid(secret1, remote_ip);
-
-			// send the ping to this node
-			bencoder b(response, sizeof(response));
-			b.open_dict();
-
-			b.add_string("ip"); b.add_string(remote_ip, 6);
-
-			// args dict
-			b.add_string("a");
-			b.open_dict();
-			b.add_string("id"); b.add_string(our_node_id.data(), our_node_id.size());
-			b.close_dict();
-
-			b.add_string("t"); b.add_string(transaction_id);
-			b.add_string("q"); b.add_string("ping");
-
-			if (version[0] != 0)
-			{
-				b.add_string("v");
-				b.add_string(version.data(), 4);
-			}
-
-			b.add_string("y"); b.add_string("q");
-
-			b.close_dict();
-
-			int len = sock.send_to(buffer(response, b.end() - response), n.ep, 0, ec);
-			if (ec) {
-				fprintf(stderr, "PING send_to failed: (%d) %s (%s:%d)\n"
-					, ec.value(), ec.message().c_str()
-					, n.ep.address().to_string(ec).c_str(),n.ep.port());
-			} else if (len <= 0) {
-				fprintf(stderr, "PING send_to failed: return=%d\n", len);
-			} else {
-				++outgoing_pings;
-			}
-		}
-
-		int len = sock.receive_from(buffer(packet, sizeof(packet)), ep, 0, ec);
+	void packet_received(bound_socket& sock, error_code const& ec, size_t len)
+	{
 		if (ec)
 		{
-			if (ec == boost::system::errc::interrupted) continue;
 			if (ec == boost::system::errc::bad_file_descriptor
 				|| ec == boost::asio::error::operation_aborted)
 			{
 				printf("stopping thread %d\n", threadid);
 				return;
 			}
-			fprintf(stderr, "receive_from: (%d) %s\n", ec.value(), ec.message().c_str());
-			return;
+			else if (ec != boost::system::errc::interrupted)
+			{
+				fprintf(stderr, "receive_from: (%d) %s\n", ec.value(), ec.message().c_str());
+				return;
+			}
 		}
+		else
+		{
+			process_incoming_packet(sock, len);
+		}
+
+		sock.sock.async_receive_from(buffer(packet, sizeof(packet)), ep
+			, std::bind(&router_thread::packet_received, this, std::ref(sock), _1, _2));
+	}
+
+	void process_incoming_packet(bound_socket& sock, size_t len)
+	{
+		error_code ec;
+
+		using libtorrent::lazy_entry;
+		using libtorrent::lazy_bdecode;
 
 		if (ep.port() == 0)
 		{
 			++invalid_src_address;
-			continue;
+			return;
 		}
 
-		// no support for IPv6
-		if (!ep.address().is_v4())
-		{
-			++invalid_src_address;
-			continue;
-		}
-
-		using libtorrent::lazy_entry;
-		using libtorrent::lazy_bdecode;
+		bool is_v4 = ep.protocol() == udp::v4();
 
 		lazy_entry e;
 		int ret = lazy_bdecode(packet, &packet[len], e, ec, nullptr, 5, 100);
 		if (ec || ret != 0 || e.type() != lazy_entry::dict_t)
 		{
 			++invalid_encoding;
-			continue;
+			return;
 		}
 
 #ifdef CLIENTS_STAT
@@ -733,18 +910,18 @@ void router_thread(int threadid, udp::socket& sock)
 			++client_histogram[client];
 		}
 #endif
-//		printf("R: %s\n", print_entry(e, true).c_str());
+		//		printf("R: %s\n", print_entry(e, true).c_str());
 
 		if (e.type() != lazy_entry::dict_t)
 		{
 			++invalid_encoding;
-			continue;
+			return;
 		}
 
 		// find the interesting fields from the message.
 		// i.e. the kind of query, the transaction id and the node id
 		std::string transaction_id = e.dict_find_string_value("t");
-		if (transaction_id.empty()) continue;
+		if (transaction_id.empty()) return;
 
 		std::string cmd = e.dict_find_string_value("q");
 
@@ -752,25 +929,22 @@ void router_thread(int threadid, udp::socket& sock)
 		if (!a)
 		{
 			a = e.dict_find_dict("r");
-			if (!a) continue;
+			if (!a) return;
 		}
 		lazy_entry const* node_id = a->dict_find_string("id");
-		if (!node_id || node_id->string_length() != 20) continue;
+		if (!node_id || node_id->string_length() != 20) return;
 
 		// build the IP response buffer, with the source
 		// IP and port that we observe from this node
-		char remote_ip[6];
-		address_v4::bytes_type b = ep.address().to_v4().to_bytes();
-		memcpy(remote_ip, &b[0], 4);
-		remote_ip[4] = (ep.port() >> 8) & 0xff;
-		remote_ip[5] = ep.port() & 0xff;
+		char remote_ip[18];
+		size_t remote_ip_len = build_ip_field(ep, remote_ip);
 
 		if (cmd.empty())
 		{
 			if (transaction_id.size() != 4)
 			{
 				++short_tid_pongs;
-				continue;
+				return;
 			}
 
 			// this is a response, presumably to a ping, since that's
@@ -779,17 +953,17 @@ void router_thread(int threadid, udp::socket& sock)
 			// if the transaction ID doesn't match, we did not send the ping.
 			// ignore it.
 			if (!verify_tid(transaction_id, secret1, secret2
-				, remote_ip))
+				, remote_ip, remote_ip_len))
 			{
 				++invalid_pongs;
-				continue;
+				return;
 			}
 
 			// this shouldn't really happen
 			if (!is_valid_ip(ep))
-				continue;
+				return;
 
-//			fprintf(stderr, "got ping response\n");
+			//			fprintf(stderr, "got ping response\n");
 
 			if (verify_node_id)
 			{
@@ -798,60 +972,85 @@ void router_thread(int threadid, udp::socket& sock)
 				generate_id(ep.address(), node_id->string_ptr()[19], h.data());
 				if (!compare_id_prefix(node_id->string_ptr(), h.data()))
 				{
+					if (ep.address().is_v6())
+						return;
+
 					// backwards compatibility. We'll save a lot of CPU
 					// once we can remove this
 					generate_id_sha1(ep.address(), node_id->string_ptr()[19], h.data());
 					if (memcmp(node_id->string_ptr(), h.data(), 4) != 0)
 					{
 						++failed_nodeid_queries;
-						continue;
+						return;
 					}
 				}
 			}
 
 			++added_nodes;
-			node_buffer.insert_node(ep, node_id->string_ptr());
+			if (is_v4)
+				node_buffer4.insert_node(ep.address().to_v4(), ep.port(), node_id->string_ptr());
+			else
+				node_buffer6.insert_node(ep.address().to_v6(), ep.port(), node_id->string_ptr());
 		}
 		else if (cmd == "ping"
-			|| cmd == "find_node"
-			|| cmd == "get_peers"
-			|| cmd == "get")
+				 || cmd == "find_node"
+				 || cmd == "get_peers"
+				 || cmd == "get")
 		{
 			bencoder b(response, sizeof(response));
 			b.open_dict();
 
 			b.add_string("ip");
-			b.add_string(remote_ip, 6);
+			b.add_string(remote_ip, remote_ip_len);
 
 			// response dict
 			b.add_string("r");
 			b.open_dict();
 			b.add_string("id");
-			b.add_string(our_node_id.data(), our_node_id.size());
+			b.add_string(sock.node_id.data(), sock.node_id.size());
 
 			// This is here for backwards compatibility
 			// except there is a bug in uTorrent where sending this
 			// aborts the bootstrap sequence, causing a 60 second delay
 			// for it to be retried (and succeed the second time)
-//			b.add_string("ip");
-//			b.add_string(remote_ip, 4);
+			//			b.add_string("ip");
+			//			b.add_string(remote_ip, 4);
 
 			if (cmd != "ping")
 			{
-				b.add_string("nodes");
-				std::string nodes = node_buffer.get_nodes();
-				int num_nodes = nodes.size() / sizeof(node_entry_t);
-				if (num_nodes < nodes_in_response && last_nodes.size() > 0)
+				std::string nodes;
+				size_t entry_size;
+				if (is_v4)
+				{
+					b.add_string("nodes");
+					nodes = node_buffer4.get_nodes();
+					entry_size = sizeof(node_entry_v4);
+				}
+				else
+				{
+					b.add_string("nodes6");
+					nodes = node_buffer6.get_nodes();
+					entry_size = sizeof(node_entry_v6);
+				}
+
+				int num_nodes = nodes.size() / entry_size;
+				size_t last_nodes_size = is_v4 ? last_nodes4.size() : last_nodes6.size();
+				if (num_nodes < nodes_in_response && last_nodes_size > 0)
 				{
 					// fill in with lower quality nodes, since 
-					nodes.resize((num_nodes + last_nodes.size()) * sizeof(node_entry_t));
+					nodes.resize((num_nodes + last_nodes_size) * entry_size);
 
 					// this is just to be able to copy the entire ringbuffer in
 					// a single call. find the physical start of its buffer
-					node_entry_t* ptr = (std::min)(last_nodes.array_one().first
-						, last_nodes.array_two().first);
-					memcpy(&nodes[num_nodes * sizeof(node_entry_t)]
-						, ptr, last_nodes.size() * sizeof(node_entry_t));
+					void* ptr;
+					if (is_v4)
+						ptr = (std::min)(last_nodes4.array_one().first
+							, last_nodes4.array_two().first);
+					else
+						ptr = (std::min)(last_nodes6.array_one().first
+							, last_nodes6.array_two().first);
+					memcpy(&nodes[num_nodes * entry_size]
+						, ptr, last_nodes_size * entry_size);
 					++backup_nodes_returned;
 				}
 				b.add_string(nodes);
@@ -873,36 +1072,76 @@ void router_thread(int threadid, udp::socket& sock)
 			b.close_dict();
 			++incoming_queries;
 
-			int len = sock.send_to(buffer(response, b.end() - response), ep, 0, ec);
+			int len = sock.sock.send_to(buffer(response, b.end() - response), ep, 0, ec);
 			if (ec)
 				fprintf(stderr, "send_to failed: [cmd: %s dest: %s:%d] (%d) %s\n"
-					, cmd.c_str(), ep.address().to_string().c_str()
-					, ep.port(), ec.value(), ec.message().c_str());
+						, cmd.c_str(), ep.address().to_string().c_str()
+						, ep.port(), ec.value(), ec.message().c_str());
 			else if (len <= 0)
 				fprintf(stderr, "send_to failed: return=%d\n", len);
 
 			// filter obvious invalid IPs, and IPv6 (since we only support
 			// IPv4 for now)
-			if (!is_valid_ip(ep)) continue;
+			if (!is_valid_ip(ep)) return;
 
 			// don't save read-only nodes
 			lazy_entry const* ro = e.dict_find_int("ro");
-			if (ro && ro->int_value() != 0) continue;
+			if (ro && ro->int_value() != 0) return;
 
 			// don't add the same IP multiple times in a row
-			if (last_nodes.empty() || last_nodes.back().ip != ep.address().to_v4().to_bytes())
+			if (is_v4 &&
+				(last_nodes4.empty() || last_nodes4.back().ip != ep.address().to_v4().to_bytes()))
 			{
-				node_entry_t e;
+				node_entry_v4 e;
 				e.ip = ep.address().to_v4().to_bytes();
 				e.port = htons(ep.port());
 				memcpy(e.node_id.data(), node_id, e.node_id.size());
-				last_nodes.push_back(e);
+				last_nodes4.push_back(e);
+			}
+			else if (!is_v4 &&
+				(last_nodes6.empty() || last_nodes6.back().ip != ep.address().to_v6().to_bytes()))
+			{
+				node_entry_v6 e;
+				e.ip = ep.address().to_v6().to_bytes();
+				e.port = htons(ep.port());
+				memcpy(e.node_id.data(), node_id, e.node_id.size());
+				last_nodes6.push_back(e);
 			}
 
 			// ping this node later, we may want to add it to our node buffer
-			ping_queue.insert_node(ep, node_id->string_ptr());
+			ping_queue.insert_node(ep, node_id->string_ptr(), sock);
 		}
 	}
+
+	io_service ios;
+	std::vector<bound_socket> socks;
+
+	ping_queue_t ping_queue;
+	node_buffer_v4 node_buffer4;
+	node_buffer_v6 node_buffer6;
+
+	// always keep the last 16 nodes that have talked to us.
+	// these are used as backups when we don't have enough nodes
+	// in the node buffer
+	boost::circular_buffer<node_entry_v4> last_nodes4;
+	boost::circular_buffer<node_entry_v6> last_nodes6;
+
+	udp::endpoint ep;
+
+	// the incoming packet
+	char packet[1500];
+
+	// the response packet
+	char response[1500];
+
+	signal_set signals;
+	int threadid;
+};
+
+void launch_router_thread(int threadid, std::vector<address> const& bind_addrs)
+{
+	router_thread t(bind_addrs);
+	t.start(threadid);
 }
 
 void print_usage()
@@ -922,6 +1161,8 @@ void print_usage()
 		"--no-verify-id        disable filtering nodes based on their node ID\n"
 		"                      and external IP (allow any node in on the\n"
 		"                      node list to hand out).\n"
+		"--ipv6 <ip>           listen for IPv6 packets on the given address\n"
+		"                      can be specified more than once\n"
 		"--version <version>   The client version to insert into all outgoing\n"
 		"                      packets. The version format must be 2 characters\n"
 		"                      followed by a dash and an integer.\n"
@@ -932,7 +1173,7 @@ void print_usage()
 }
 
 void signal_handler(error_code const& e, int signo, signal_set& signals
-	, deadline_timer& stats_timer, udp::socket& sock, io_service& ios)
+	, deadline_timer& stats_timer, io_service& ios)
 {
 	error_code ec;
 	if (signo == SIGHUP) {
@@ -941,16 +1182,11 @@ void signal_handler(error_code const& e, int signo, signal_set& signals
 		ios.post(std::bind(&print_stats, std::ref(stats_timer), ec));
 
 		signals.async_wait(std::bind(&signal_handler, _1, _2
-			, std::ref(signals), std::ref(stats_timer), std::ref(sock)
-			, std::ref(ios)));
+			, std::ref(signals), std::ref(stats_timer), std::ref(ios)));
 		return;
 	}
 
-	stats_timer.cancel();
-	sock.close(ec);
-	if (ec)
-		fprintf(stderr, "socket: (%d) %s\n"
-			, ec.value(), ec.message().c_str());
+	ios.stop();
 };
 
 int main(int argc, char* argv[])
@@ -962,6 +1198,10 @@ int main(int argc, char* argv[])
 	}
 
 	int num_threads = std::thread::hardware_concurrency();
+
+	std::vector<address> bind_addrs;
+
+	error_code ec;
 
 	for (int i = 2; i < argc; ++i)
 	{
@@ -1022,6 +1262,13 @@ int main(int argc, char* argv[])
 		{
 			verify_node_id = false;
 		}
+		else if (strcmp(argv[i], "--ipv6") == 0)
+		{
+			++i;
+			address_v6 addr = address_v6::from_string(argv[i], ec);
+			if (!ec)
+				bind_addrs.push_back(addr);
+		}
 		else if (strcmp(argv[i], "--version") == 0)
 		{
 			++i;
@@ -1054,54 +1301,50 @@ int main(int argc, char* argv[])
 	ping_queue_size /= num_threads;
 	node_buffer_size /= num_threads;
 
-	static_assert(sizeof(node_entry_t) == 26, "node_entry_t may not contain padding");
+	static_assert(sizeof(node_entry_v4) == 26, "node_entry_t may not contain padding");
+	static_assert(sizeof(node_entry_v6) == 38, "node_entry_t may not contain padding");
 
-	error_code ec;
-	address_v4 our_external_ip = address_v4::from_string(argv[1], ec);
-	if (ec)
 	{
-		fprintf(stderr, "invalid external IP address specified: %s\n"
-			, ec.message().c_str());
-		return 1;
+		address_v4 our_external_ip = address_v4::from_string(argv[1], ec);
+		if (ec)
+		{
+			fprintf(stderr, "invalid external IP address specified: %s\n"
+				, ec.message().c_str());
+			return 1;
+		}
+
+		bind_addrs.push_back(our_external_ip);
 	}
 
 	io_service ios;
-	udp::socket sock(ios);
-
-	sock.open(udp::v4(), ec);
-	if (ec)
-	{
-		fprintf(stderr, "socket: (%d) %s\n", ec.value(), ec.message().c_str());
-		return 1;
-	}
-
-	boost::asio::socket_base::reuse_address option(true);
-	sock.set_option(option, ec);
-	if (ec)
-	{
-		fprintf(stderr, "reuse address: (%d) %s\n", ec.value(), ec.message().c_str());
-		return 1;
-	}
-
-	sock.bind(udp::endpoint(our_external_ip, 6881), ec);
-	if (ec)
-	{
-		fprintf(stderr, "bind: (%d) %s\n", ec.value(), ec.message().c_str());
-		return 1;
-	}
-	
-	// set send and receive buffers relatively large
-	boost::asio::socket_base::receive_buffer_size recv_size(512 * 1024);
-	sock.set_option(recv_size);
-	boost::asio::socket_base::send_buffer_size send_size(512 * 1024);
-	sock.set_option(send_size);
-
-	// initialize our_node_id
-	generate_id(our_external_ip, std::rand(), our_node_id.data());
 
 	deadline_timer stats_timer(ios);
 	stats_timer.expires_from_now(boost::posix_time::seconds(print_stats_interval));
 	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
+
+	std::random_device r;
+
+	{
+		std::mt19937 rand(r());
+		std::uniform_int_distribution<uint8_t> random_byte(0, 0xff);
+
+		uint8_t* secret = new uint8_t[20];
+		std::generate(secret, secret + 20, [&](){ return random_byte(rand);});
+		secret1 = secret;
+		secret = new uint8_t[20];
+		std::generate(secret, secret + 20, [&](){ return random_byte(rand);});
+		secret2 = secret;
+		intermediate = new uint8_t[20];
+	}
+
+	deadline_timer secrets_timer(ios);
+	secrets_timer.expires_from_now(boost::posix_time::seconds(rotate_secrets_interval));
+	secrets_timer.async_wait(std::bind(&rotate_secrets, std::ref(secrets_timer), std::ref(r), _1));
+
+	std::vector<std::thread> threads;
+	threads.reserve(num_threads);
+	for (int i = 0; i < num_threads; ++i)
+		threads.emplace_back(&launch_router_thread, i, std::ref(bind_addrs));
 
 	// listen on signals to be able to shut down
 	signal_set signals(ios);
@@ -1111,26 +1354,7 @@ int main(int argc, char* argv[])
 
 	// close the socket when signalled to quit
 	signals.async_wait(std::bind(&signal_handler, _1, _2
-		, std::ref(signals), std::ref(stats_timer), std::ref(sock)
-		, std::ref(ios)));
-
-	std::random_device r;
-	std::mt19937 rand(r());
-	std::uniform_int_distribution<uint8_t> random_byte(0, 0xff);
-
-	uint8_t* secret = new uint8_t[20];
-	std::generate(secret, secret + 20, [&](){ return random_byte(rand);});
-	secret1 = secret;
-	secret = new uint8_t[20];
-	std::generate(secret, secret + 20, [&](){ return random_byte(rand);});
-	secret2 = secret;
-	intermediate = new uint8_t[20];
-	last_secret_rotate = steady_clock::now();
-
-	std::vector<std::thread> threads;
-	threads.reserve(num_threads);
-	for (int i = 0; i < num_threads; ++i)
-		threads.emplace_back(&router_thread, i, std::ref(sock));
+		, std::ref(signals), std::ref(stats_timer), std::ref(ios)));
 
 	ios.run(ec);
 	if (ec)
