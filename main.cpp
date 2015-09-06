@@ -72,6 +72,8 @@ using namespace std::placeholders;
 
 typedef steady_clock::time_point time_point;
 
+typedef std::array<char, 20> node_id_type;
+
 const int print_stats_interval = 60;
 const int nodes_in_response = 16;
 int node_buffer_size = 10000000;
@@ -226,7 +228,7 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 struct queued_node_t
 {
 	udp::endpoint ep;
-	char node_id[20];
+	node_id_type node_id;
 
 	// the time when this node should be pinged
 	time_point expire;
@@ -279,7 +281,7 @@ struct ping_queue_t
 
 		queued_node_t e;
 		e.ep = ep;
-		memcpy(e.node_id, node_id, 20);
+		memcpy(e.node_id.data(), node_id, e.node_id.size());
 		// we primarily want to keep quality nodes in our list.
 		// in 10 minutes, any pin-hole the node may have had open to
 		// us is likely to have been closed. If the node responds
@@ -313,7 +315,7 @@ private:
 // in the circular buffer
 struct node_entry_t
 {
-	char node_id[20];
+	node_id_type node_id;
 	address_v4::bytes_type ip;
 	uint16_t port;
 };
@@ -376,7 +378,7 @@ struct node_buffer_t
 		node_entry_t e;
 		e.ip = ep.address().to_v4().to_bytes();
 		e.port = htons(ep.port());
-		memcpy(e.node_id, node_id, 20);
+		memcpy(e.node_id.data(), node_id, e.node_id.size());
 
 		// we're not supposed to add 0.0.0.0
 		assert(ep.address() != address_v4::any());
@@ -444,7 +446,7 @@ private:
 	std::unordered_set<address_v4::bytes_type> m_ips;
 };
 
-char our_node_id[20];
+node_id_type our_node_id;
 
 
 std::string compute_tid(uint8_t const* secret, char const* remote_ip)
@@ -655,7 +657,7 @@ void router_thread(int threadid, udp::socket& sock)
 			// args dict
 			b.add_string("a");
 			b.open_dict();
-			b.add_string("id"); b.add_string(our_node_id, 20);
+			b.add_string("id"); b.add_string(our_node_id.data(), our_node_id.size());
 			b.close_dict();
 
 			b.add_string("t"); b.add_string(transaction_id);
@@ -792,14 +794,14 @@ void router_thread(int threadid, udp::socket& sock)
 			if (verify_node_id)
 			{
 				// verify that the node ID is valid for the source IP
-				char h[20];
-				generate_id(ep.address(), node_id->string_ptr()[19], h);
-				if (!compare_id_prefix(node_id->string_ptr(), &h[0]))
+				node_id_type h;
+				generate_id(ep.address(), node_id->string_ptr()[19], h.data());
+				if (!compare_id_prefix(node_id->string_ptr(), h.data()))
 				{
 					// backwards compatibility. We'll save a lot of CPU
 					// once we can remove this
-					generate_id_sha1(ep.address(), node_id->string_ptr()[19], h);
-					if (memcmp(node_id->string_ptr(), &h[0], 4) != 0)
+					generate_id_sha1(ep.address(), node_id->string_ptr()[19], h.data());
+					if (memcmp(node_id->string_ptr(), h.data(), 4) != 0)
 					{
 						++failed_nodeid_queries;
 						continue;
@@ -825,7 +827,7 @@ void router_thread(int threadid, udp::socket& sock)
 			b.add_string("r");
 			b.open_dict();
 			b.add_string("id");
-			b.add_string(our_node_id, 20);
+			b.add_string(our_node_id.data(), our_node_id.size());
 
 			// This is here for backwards compatibility
 			// except there is a bug in uTorrent where sending this
@@ -893,7 +895,7 @@ void router_thread(int threadid, udp::socket& sock)
 				node_entry_t e;
 				e.ip = ep.address().to_v4().to_bytes();
 				e.port = htons(ep.port());
-				memcpy(e.node_id, node_id, 20);
+				memcpy(e.node_id.data(), node_id, e.node_id.size());
 				last_nodes.push_back(e);
 			}
 
@@ -1095,7 +1097,7 @@ int main(int argc, char* argv[])
 	sock.set_option(send_size);
 
 	// initialize our_node_id
-	generate_id(our_external_ip, std::rand(), our_node_id);
+	generate_id(our_external_ip, std::rand(), our_node_id.data());
 
 	deadline_timer stats_timer(ios);
 	stats_timer.expires_from_now(boost::posix_time::seconds(print_stats_interval));
