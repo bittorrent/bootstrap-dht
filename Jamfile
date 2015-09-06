@@ -9,6 +9,7 @@ exe dht-bootstrap
 	: # requirements
 	<threading>multi
 	<library>boost-system
+	<toolset>gcc:<cxxflags>-std=c++11
 	: # default build
 	<link>static
 	<threading>multi
