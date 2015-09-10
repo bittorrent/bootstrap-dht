@@ -15,4 +15,20 @@ exe dht-bootstrap
 	<threading>multi
 	: # usage requirements
 	;
-install stage : dht-bootstrap : <location>. ;
+
+exe dht-torture
+
+	: # sources
+	dht-torture.cpp lazy_bdecode.cpp
+
+	: # requirements
+	<threading>multi
+	<library>boost-system
+	<toolset>gcc:<cxxflags>-std=c++11
+	: # default build
+	<link>static
+	<threading>multi
+	: # usage requirements
+	;
+
+install stage : dht-bootstrap dht-torture : <location>. ;
