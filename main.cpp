@@ -75,6 +75,10 @@ typedef steady_clock::time_point time_point;
 
 typedef std::array<char, 20> node_id_type;
 
+// The size of ipv6_prefix_type determines the size of the prefix to compare
+// when determining if an IPv6 address should be discarded as a duplicate
+typedef std::array<unsigned char, 6> ipv6_prefix_type;
+
 const int print_stats_interval = 60;
 const int rotate_secrets_interval = 600;
 const int nodes_in_response = 16;
@@ -101,9 +105,9 @@ struct hash<address_v4::bytes_type> : hash<uint32_t>
 };
 
 template <>
-struct hash<address_v6::bytes_type> : hash<uint32_t>
+struct hash<ipv6_prefix_type> : hash<uint32_t>
 {
-	size_t operator()(address_v6::bytes_type ip) const
+	size_t operator()(ipv6_prefix_type ip) const
 	{
 		// this is the crc32c (Castagnoli) polynomial
 		boost::crc_optimal<32, 0x1EDC6F41, 0xFFFFFFFF, 0xFFFFFFFF, true, true> crc;
@@ -395,6 +399,76 @@ struct queued_node_t
 	time_point expire;
 };
 
+template <typename T, typename K>
+void erase_one(T& container, K const& key)
+{
+	typename T::iterator i = container.find(key);
+	assert(i != container.end());
+	container.erase(i);
+}
+
+template <typename Address>
+struct ip_set {};
+
+template <>
+struct ip_set<address_v4>
+{
+	bool insert(address_v4 addr)
+	{
+		return m_ips.insert(addr.to_bytes()).second;
+	}
+
+	size_t count(address_v4 addr)
+	{
+		return m_ips.count(addr.to_bytes());
+	}
+
+	void erase(address_v4 addr)
+	{
+		erase_one(m_ips, addr.to_bytes());
+	}
+
+	bool operator==(ip_set const& rh)
+	{
+		return m_ips == rh.m_ips;
+	}
+
+	std::unordered_set<address_v4::bytes_type> m_ips;
+};
+
+template <>
+struct ip_set<address_v6>
+{
+	bool insert(address_v6 addr)
+	{
+		return m_ips.insert(extract_prefix(addr)).second;
+	}
+
+	size_t count(address_v6 addr)
+	{
+		return m_ips.count(extract_prefix(addr));
+	}
+
+	void erase(address_v6 addr)
+	{
+		erase_one(m_ips, extract_prefix(addr));
+	}
+
+	bool operator==(ip_set const& rh)
+	{
+		return m_ips == rh.m_ips;
+	}
+
+	ipv6_prefix_type extract_prefix(address_v6 addr)
+	{
+		ipv6_prefix_type ip6;
+		memcpy(ip6.data(), addr.to_bytes().data(), ip6.size());
+		return ip6;
+	}
+
+	std::unordered_set<ipv6_prefix_type> m_ips;
+};
+
 struct ping_queue_t
 {
 	ping_queue_t()
@@ -413,7 +487,10 @@ struct ping_queue_t
 
 		*out = m_queue.front();
 		m_queue.pop_front();
-		m_ips.erase(out->ep);
+		if (out->ep.protocol() == udp::v4())
+			m_ip4s.erase(out->ep.address().to_v4());
+		else
+			m_ip6s.erase(out->ep.address().to_v6());
 
 		assert(out->ep.address() != address_v4::any());
 
@@ -428,7 +505,12 @@ struct ping_queue_t
 	{
 		assert(ep.address() != address_v4::any());
 
-		if (m_ips.count(ep)) return;
+		if (ep.protocol() == udp::v4()
+			&& m_ip4s.count(ep.address().to_v4()))
+			return;
+		else if (ep.protocol() == udp::v6()
+			&& m_ip6s.count(ep.address().to_v6()))
+			return;
 
 		// don't let the queue get too big
 		if (m_queue.size() > ping_queue_size) return;
@@ -455,13 +537,17 @@ struct ping_queue_t
 		e.expire = steady_clock::now() + minutes(15);
 
 		m_queue.push_back(e);
-		m_ips.insert(ep);
+		if (ep.protocol() == udp::v4())
+			m_ip4s.insert(ep.address().to_v4());
+		else
+			m_ip6s.insert(ep.address().to_v6());
 	}
 
 private:
 
 	// the set of IPs in the queue. An IP is only allowed to appear once
-	std::set<udp::endpoint> m_ips;
+	ip_set<address_v4> m_ip4s;
+	ip_set<address_v6> m_ip6s;
 
 	// the queue of nodes we should ping, ordered by the
 	// time they were added
@@ -555,7 +641,7 @@ struct node_buffer_t
 		assert(!addr.is_unspecified());
 
 		// only allow once entry per IP
-		if (m_ips.count(e.ip)) return;
+		if (m_ips.count(address_type(e.ip))) return;
 
 		auto now = steady_clock::now();
 		if (m_write_cursor == m_current_max_size
@@ -584,16 +670,16 @@ struct node_buffer_t
 		if (m_buffer.size() < m_current_max_size)
 		{
 			m_buffer.push_back(e);
-			m_ips.insert(e.ip);
+			m_ips.insert(address_type(e.ip));
 			++m_write_cursor;
 			return;
 		}
 
 		// remove the IP we're overwriting from our IP set
-		m_ips.erase(m_buffer[m_write_cursor].ip);
+		m_ips.erase(address_type(m_buffer[m_write_cursor].ip));
 		m_buffer[m_write_cursor] = e;
 		// and add the one we just put in
-		m_ips.insert(e.ip);
+		m_ips.insert(address_type(e.ip));
 		++m_write_cursor;
 	}
 
@@ -614,7 +700,7 @@ private:
 
 	// this is a set of all IPs that's currently in the buffer. We only allow
 	// one instance of each IP
-	std::unordered_set<typename address_type::bytes_type> m_ips;
+	ip_set<address_type> m_ips;
 };
 
 typedef node_buffer_t<address_v4> node_buffer_v4;
