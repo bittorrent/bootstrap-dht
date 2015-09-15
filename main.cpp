@@ -963,6 +963,32 @@ struct router_thread
 			, std::bind(&router_thread::packet_received, this, std::ref(sock), _1, _2));
 	}
 
+	template <typename Address>
+	std::string get_nodes(node_buffer_t<Address>& node_buffer
+		, boost::circular_buffer<node_entry_t<Address>>& last_nodes)
+	{
+		const size_t entry_size = sizeof(node_entry_t<Address>);
+		std::string nodes = node_buffer.get_nodes();
+
+		int num_nodes = nodes.size() / entry_size;
+		if (num_nodes < nodes_in_response && last_nodes.size() > 0)
+		{
+			// fill in with lower quality nodes, since
+			nodes.resize((num_nodes + last_nodes.size()) * entry_size);
+
+			// this is just to be able to copy the entire ringbuffer in
+			// a single call. find the physical start of its buffer
+			void* ptr;
+			ptr = (std::min)(last_nodes.array_one().first
+				, last_nodes.array_two().first);
+			memcpy(&nodes[num_nodes * entry_size]
+				, ptr, last_nodes.size() * entry_size);
+			++backup_nodes_returned;
+		}
+
+		return nodes;
+	}
+
 	void process_incoming_packet(bound_socket& sock, size_t len)
 	{
 		error_code ec;
@@ -1104,42 +1130,39 @@ struct router_thread
 
 			if (cmd != "ping")
 			{
-				std::string nodes;
-				size_t entry_size;
-				if (is_v4)
+				bool want_v4 = false, want_v6 = false;
+
+				lazy_entry const* want = a->dict_find_list("want");
+				if (want)
 				{
-					b.add_string("nodes");
-					nodes = node_buffer4.get_nodes();
-					entry_size = sizeof(node_entry_v4);
+					for (int i = 0; i < want->list_size(); ++i)
+					{
+						lazy_entry const* w = want->list_at(i);
+						if (w->type() != lazy_entry::string_t) continue;
+						if (w->string_length() != 2) continue;
+						if (memcmp(w->string_ptr(), "n4", 2) == 0)
+							want_v4 = true;
+						else if (memcmp(w->string_ptr(), "n6", 2) == 0)
+							want_v6 = true;
+					}
 				}
 				else
 				{
-					b.add_string("nodes6");
-					nodes = node_buffer6.get_nodes();
-					entry_size = sizeof(node_entry_v6);
+					want_v4 = is_v4;
+					want_v6 = !is_v4;
 				}
 
-				int num_nodes = nodes.size() / entry_size;
-				size_t last_nodes_size = is_v4 ? last_nodes4.size() : last_nodes6.size();
-				if (num_nodes < nodes_in_response && last_nodes_size > 0)
+				if (want_v4)
 				{
-					// fill in with lower quality nodes, since 
-					nodes.resize((num_nodes + last_nodes_size) * entry_size);
-
-					// this is just to be able to copy the entire ringbuffer in
-					// a single call. find the physical start of its buffer
-					void* ptr;
-					if (is_v4)
-						ptr = (std::min)(last_nodes4.array_one().first
-							, last_nodes4.array_two().first);
-					else
-						ptr = (std::min)(last_nodes6.array_one().first
-							, last_nodes6.array_two().first);
-					memcpy(&nodes[num_nodes * entry_size]
-						, ptr, last_nodes_size * entry_size);
-					++backup_nodes_returned;
+					b.add_string("nodes");
+					b.add_string(get_nodes(node_buffer4, last_nodes4));
 				}
-				b.add_string(nodes);
+
+				if (want_v6)
+				{
+					b.add_string("nodes6");
+					b.add_string(get_nodes(node_buffer6, last_nodes6));
+				}
 			}
 			b.close_dict();
 
