@@ -384,6 +384,9 @@ struct bound_socket
 
 	udp::socket sock;
 	node_id_type node_id;
+
+	// the incoming packet
+	char packet[1500];
 };
 
 // this is the type of each node queued up
@@ -861,7 +864,7 @@ struct router_thread
 
 		for (bound_socket& sock : socks)
 		{
-			sock.sock.async_receive_from(buffer(packet, sizeof(packet)), ep
+			sock.sock.async_receive_from(buffer(sock.packet, sizeof(sock.packet)), ep
 				, std::bind(&router_thread::packet_received, this, std::ref(sock), _1, _2));
 		}
 
@@ -959,7 +962,7 @@ struct router_thread
 			process_incoming_packet(sock, len);
 		}
 
-		sock.sock.async_receive_from(buffer(packet, sizeof(packet)), ep
+		sock.sock.async_receive_from(buffer(sock.packet, sizeof(sock.packet)), ep
 			, std::bind(&router_thread::packet_received, this, std::ref(sock), _1, _2));
 	}
 
@@ -1005,7 +1008,7 @@ struct router_thread
 		bool is_v4 = ep.protocol() == udp::v4();
 
 		lazy_entry e;
-		int ret = lazy_bdecode(packet, &packet[len], e, ec, nullptr, 5, 100);
+		int ret = lazy_bdecode(sock.packet, &sock.packet[len], e, ec, nullptr, 5, 100);
 		if (ec || ret != 0 || e.type() != lazy_entry::dict_t)
 		{
 			++invalid_encoding;
@@ -1236,9 +1239,6 @@ struct router_thread
 	boost::circular_buffer<node_entry_v6> last_nodes6;
 
 	udp::endpoint ep;
-
-	// the incoming packet
-	char packet[1500];
 
 	// the response packet
 	char response[1500];
