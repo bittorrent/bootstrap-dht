@@ -29,7 +29,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <boost/asio.hpp>
 #include <boost/crc.hpp>
 
-#include "lazy_entry.hpp"
+#include "bdecode.hpp"
 #include "bencode.hpp"
 
 using boost::asio::ip::udp;
@@ -143,16 +143,18 @@ struct client
 			throw boost::system::system_error(err);
 		}
 
-		using libtorrent::lazy_entry;
-		using libtorrent::lazy_bdecode;
+		using libtorrent::bdecode_node;
+		using libtorrent::bdecode;
 
-		error_code ec;
-		lazy_entry e;
-		int ret = lazy_bdecode(packet, &packet[len], e, ec, nullptr, 5, 100);
-		if (ec || ret != 0 || e.type() != lazy_entry::dict_t)
+		bdecode_node e;
 		{
-			std::cerr << "Error decoding packet: " << std::string(packet, len) << std::endl;
-			return;
+			std::error_code ec;
+			int const ret = bdecode(packet, &packet[len], e, ec, nullptr, 5, 100);
+			if (ec || ret != 0 || e.type() != bdecode_node::dict_t)
+			{
+				std::cerr << "Error decoding packet: " << std::string(packet, len) << std::endl;
+				return;
+			}
 		}
 
 		std::string transaction_id = e.dict_find_string_value("t");
@@ -160,15 +162,15 @@ struct client
 
 		std::string cmd = e.dict_find_string_value("q");
 
-		lazy_entry const* a = e.dict_find_dict("a");
+		bdecode_node a = e.dict_find_dict("a");
 		if (!a)
 		{
 			a = e.dict_find_dict("r");
 			if (!a) return;
 		}
 
-		lazy_entry const* node_id = a->dict_find_string("id");
-		if (!node_id || node_id->string_length() != 20) return;
+		bdecode_node const node_id = a.dict_find_string("id");
+		if (!node_id || node_id.string_length() != 20) return;
 
 		if (cmd.empty())
 		{
@@ -179,8 +181,8 @@ struct client
 			}
 
 			node_id_type h;
-			generate_id(ep.address(), node_id->string_ptr()[19], h.data());
-			if (!compare_id_prefix(node_id->string_ptr(), h.data()))
+			generate_id(ep.address(), node_id.string_ptr()[19], h.data());
+			if (!compare_id_prefix(node_id.string_ptr(), h.data()))
 			{
 				std::cerr << "invalid node id: " << ep.address().to_string() << ':' << ep.port() << std::endl;
 				return;
@@ -220,7 +222,8 @@ struct client
 
 			b.close_dict();
 
-			int len = sock.send_to(buffer(response, b.end() - response), ep, 0, ec);
+			boost::system::error_code ec;
+			int const len = sock.send_to(buffer(response, b.end() - response), ep, 0, ec);
 			if (ec)
 			{
 				fprintf(stderr, "send_to failed: [cmd: %s dest: %s:%d] (%d) %s\n"
