@@ -41,10 +41,21 @@ int main()
 	}
 
 	{
-		mapped_vector<int> mf("test_file2", 10);
+		// make sure the size of the vector (not the capacity) is correctly
+		// restored when loading it back up again
+		mapped_vector<int> mv("test_file2", 30);
+		assert(mv.size() == 10);
+		assert(mv.capacity() == 30);
 		for (int i = 0; i < 10; ++i) {
-			assert(mf[i] == i);
+			assert(mv[i] == i);
 		}
+	}
+
+	// make sure the size is capped at the capacity, if the capacity is shrunk
+	{
+		mapped_vector<int> mv("test_file2", 5);
+		assert(mv.size() == 5);
+		assert(mv.capacity() == 5);
 	}
 
 	unlink("test_file2");

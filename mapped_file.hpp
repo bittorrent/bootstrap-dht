@@ -70,7 +70,8 @@ struct mapped_file
 	mapped_file(mapped_file const&) = delete;
 	mapped_file& operator=(mapped_file const&) = delete;
 
-	void* data() const { return m_buf; }
+	void* data() { return m_buf; }
+	void const* data() const { return m_buf; }
 	size_t size() const { return m_size; }
 
 	~mapped_file() { munmap(m_buf, m_size); }
