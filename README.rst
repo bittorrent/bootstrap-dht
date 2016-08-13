@@ -25,6 +25,8 @@ The command line options are::
 	--no-verify-id        disable filtering nodes based on their node ID
 	                      and external IP (allow any node in on the
 	                      node list to hand out).
+	--ipv6 <ip>           listen for IPv6 packets on the given address
+	                      can be specified more than once
 
 
 The first argument when launching the server is its own IP. This is not
