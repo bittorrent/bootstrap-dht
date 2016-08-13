@@ -53,6 +53,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "bdecode.hpp"
 #include "bencode.hpp"
+#include "mapped_file.hpp"
 
 using boost::asio::signal_set;
 using boost::asio::io_service;
@@ -71,13 +72,13 @@ using std::chrono::duration_cast;
 using boost::uuids::detail::sha1;
 using namespace std::placeholders;
 
-typedef steady_clock::time_point time_point;
+using time_point = steady_clock::time_point;
 
-typedef std::array<char, 20> node_id_type;
+using node_id_type = std::array<char, 20>;
 
 // The size of ipv6_prefix_type determines the size of the prefix to compare
 // when determining if an IPv6 address should be discarded as a duplicate
-typedef std::array<unsigned char, 6> ipv6_prefix_type;
+using ipv6_prefix_type = std::array<unsigned char, 6>;
 
 const int print_stats_interval = 60;
 const int rotate_secrets_interval = 600;
@@ -523,6 +524,8 @@ private:
 
 	// the queue of nodes we should ping, ordered by the
 	// time they were added
+	// TODO: it would be nice to keep the ping queue in a memory mapped file as
+	// well
 	std::deque<queued_node_t> m_queue;
 
 	int m_round_robin;
@@ -542,28 +545,25 @@ struct node_entry_t
 	uint16_t port;
 };
 
-typedef node_entry_t<address_v4> node_entry_v4;
-typedef node_entry_t<address_v6> node_entry_v6;
+using node_entry_v4 = node_entry_t<address_v4>;
+using node_entry_v6 = node_entry_t<address_v6>;
 
 template <typename Address>
 struct node_buffer_t
 {
-	typedef Address address_type;
-	typedef node_entry_t<address_type> node_entry_type;
+	using address_type = Address;
+	using node_entry_type = node_entry_t<address_type>;
 
-	node_buffer_t()
-		: m_read_cursor(0)
-		, m_write_cursor(0)
-		, m_current_max_size(99)
-		, m_last_write_loop(steady_clock::now())
-	{
-		m_buffer.reserve(node_buffer_size);
-	}
+	node_buffer_t(char const* filename)
+		: m_last_write_loop(steady_clock::now())
+		, m_buffer(filename, node_buffer_size)
+	{}
 
 	bool empty() const { return m_buffer.empty(); }
 
 	int size() const { return m_current_max_size; }
 
+	// TODO: try to avoid heap allocations here
 	std::string get_nodes()
 	{
 		std::string ret;
@@ -590,12 +590,12 @@ struct node_buffer_t
 			return ret;
 		}
 
-		int slice1 = m_buffer.size() - m_read_cursor;
+		int const slice1 = m_buffer.size() - m_read_cursor;
 		assert(slice1 < nodes_in_response);
 		memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_type) * slice1);
 		m_read_cursor += slice1;
 
-		int slice2 = nodes_in_response - slice1;
+		int const slice2 = nodes_in_response - slice1;
 		memcpy(&ret[slice1 * sizeof(node_entry_type)], &m_buffer[0]
 			, sizeof(node_entry_type) * slice2);
 		m_read_cursor = slice2;
@@ -641,7 +641,7 @@ struct node_buffer_t
 
 		if (m_buffer.size() < m_current_max_size)
 		{
-			m_buffer.push_back(e);
+			m_buffer.emplace_back(e);
 			m_ips.insert(address_type(e.ip));
 			++m_write_cursor;
 			return;
@@ -657,27 +657,28 @@ struct node_buffer_t
 
 private:
 
-	int m_read_cursor;
-	int m_write_cursor;
+	int m_read_cursor = 0;
+	int m_write_cursor = 0;
 
 	// the current max size we use for the node buffer. If it's churning too
 	// frequently, we grow it
-	int m_current_max_size;
+	int m_current_max_size = 99;
 
 	// the last time we looped the write cursor. If this is less than 15 minutes
 	// we double the size of the buffer (capped at the specified size)
 	steady_clock::time_point m_last_write_loop;
 
-	std::vector<node_entry_type> m_buffer;
+	mapped_vector<node_entry_type> m_buffer;
 
 	// this is a set of all IPs that's currently in the buffer. We only allow
 	// one instance of each IP
 	ip_set<address_type> m_ips;
 };
 
-typedef node_buffer_t<address_v4> node_buffer_v4;
-typedef node_buffer_t<address_v6> node_buffer_v6;
+using node_buffer_v4 = node_buffer_t<address_v4>;
+using node_buffer_v6 = node_buffer_t<address_v6>;
 
+// TODO: avoid heap allocation here
 std::string compute_tid(uint8_t const* secret, char const* remote_ip, size_t ip_len)
 {
 	sha1 ctx;
@@ -790,14 +791,31 @@ size_t build_ip_field(udp::endpoint ep, char* remote_ip)
 
 std::array<char, 4> version = {{0, 0, 0, 0}};
 
+std::string storage_filename(char const* base_path, int const threadid, bool const v6)
+{
+	char name[50];
+	std::snprintf(name, sizeof(name), "%s/node-buffer-%d-%s"
+		, base_path, threadid, v6 ? "v6" : "v4");
+	return name;
+}
+
 struct router_thread
 {
-	router_thread(std::vector<address> addrs)
-		: signals(ios)
+	router_thread(char const* storage_dir, int const tid, std::vector<address> addrs)
+		: node_buffer4(storage_filename(storage_dir, tid, false).c_str())
+		, node_buffer6(storage_filename(storage_dir, tid, true).c_str())
+		, signals(ios)
+		, threadid(tid)
 	{
 		for (address a : addrs)
 		{
 			socks.emplace_back(ios, udp::endpoint(a, 6881));
+		}
+
+		if (socks.empty())
+		{
+			fprintf(stderr, "no interfaces to receive on\n");
+			return;
 		}
 
 		signals.add(SIGINT);
@@ -820,15 +838,8 @@ struct router_thread
 		ios.stop();
 	}
 
-	void start(int threadid)
+	void start()
 	{
-		if (socks.empty())
-		{
-			fprintf(stderr, "no interfaces to receive on\n");
-			return;
-		}
-
-		this->threadid = threadid;
 		printf("starting thread %d\n", threadid);
 
 		for (bound_socket& sock : socks)
@@ -851,7 +862,7 @@ struct router_thread
 			{
 				//			fprintf(stderr, "pinging node\n");
 				char remote_ip[18];
-				size_t remote_ip_len = build_ip_field(n.ep, remote_ip);
+				size_t const remote_ip_len = build_ip_field(n.ep, remote_ip);
 				std::string transaction_id = compute_tid(secret1, remote_ip, remote_ip_len);
 
 				// send the ping to this node
@@ -1217,12 +1228,6 @@ struct router_thread
 	int threadid;
 };
 
-void launch_router_thread(int threadid, std::vector<address> const& bind_addrs)
-{
-	router_thread t(bind_addrs);
-	t.start(threadid);
-}
-
 void print_usage()
 {
 	fprintf(stderr, "usage: dht-bootstrap <external-IP> [options]\n"
@@ -1245,12 +1250,14 @@ void print_usage()
 		"--version <version>   The client version to insert into all outgoing\n"
 		"                      packets. The version format must be 2 characters\n"
 		"                      followed by a dash and an integer.\n"
+		"--dir <path>          specify the directory where the node buckets are\n"
+		"                      stored on disk. Defaults to \".\".\n"
 		"\n"
 		"\n"
 	);
 }
 
-void signal_handler(error_code const& e, int signo, signal_set& signals
+void signal_handler(error_code const& e, int const signo, signal_set& signals
 	, deadline_timer& stats_timer, io_service& ios)
 {
 	error_code ec;
@@ -1287,6 +1294,7 @@ int main(int argc, char* argv[])
 	int num_threads = std::thread::hardware_concurrency();
 
 	std::vector<address> bind_addrs;
+	char const* storage_dir = ".";
 
 	error_code ec;
 
@@ -1344,6 +1352,16 @@ int main(int argc, char* argv[])
 				fprintf(stderr, "WARNING: ping queue suspiciously small, using %d\n"
 					, ping_queue_size);
 			}
+		}
+		else if (argv[i] == "--dir"_s)
+		{
+			++i;
+			if (i >= argc)
+			{
+				fprintf(stderr, "--dir expects a directory path argument\n");
+				return 1;
+			}
+			storage_dir = argv[i];
 		}
 		else if (argv[i] == "--no-verify-id"_s)
 		{
@@ -1437,8 +1455,12 @@ int main(int argc, char* argv[])
 
 	std::vector<std::thread> threads;
 	threads.reserve(num_threads);
-	for (int i = 0; i < num_threads; ++i)
-		threads.emplace_back(&launch_router_thread, i, std::ref(bind_addrs));
+	for (int i = 0; i < num_threads; ++i) {
+		threads.emplace_back([=]{
+			router_thread t(storage_dir, i, bind_addrs);
+			t.start();
+		});
+	}
 
 	// listen on signals to be able to shut down
 	signal_set signals(ios);
@@ -1451,14 +1473,15 @@ int main(int argc, char* argv[])
 		, std::ref(signals), std::ref(stats_timer), std::ref(ios)));
 
 	ios.run(ec);
+
+	for (auto& i : threads)
+		i.join();
+
 	if (ec)
 	{
 		fprintf(stderr, "io_service: (%d) %s\n", ec.value(), ec.message().c_str());
 		return 1;
 	}
-
-	for (auto& i : threads)
-		i.join();
 
 	delete[] secret1.load();
 	delete[] secret2.load();
