@@ -9,8 +9,8 @@ exe dht-bootstrap
 	: # requirements
 	<threading>multi
 	<library>boost-system
-	<toolset>gcc:<cxxflags>-std=c++14
-	<toolset>darwin:<cxxflags>-std=c++14
+	<toolset>gcc:<cxxflags>-std=c++11
+	<toolset>darwin:<cxxflags>-std=c++11
 	: # default build
 	<link>static
 	<threading>multi
@@ -25,8 +25,8 @@ exe dht-torture
 	: # requirements
 	<threading>multi
 	<library>boost-system
-	<toolset>gcc:<cxxflags>-std=c++14
-	<toolset>darwin:<cxxflags>-std=c++14
+	<toolset>gcc:<cxxflags>-std=c++11
+	<toolset>darwin:<cxxflags>-std=c++11
 	: # default build
 	<link>static
 	<threading>multi

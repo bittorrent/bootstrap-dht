@@ -1297,16 +1297,18 @@ void signal_handler(error_code const& e, int signo, signal_set& signals
 	ios.stop();
 };
 
+std::string operator "" _s(const char* str, size_t len)
+{ return std::string(str, len); }
+
 int main(int argc, char* argv[])
 {
-	using namespace std::string_literals;
 	if (argc < 2)
 	{
 		print_usage();
 		return 1;
 	}
 
-	if (argc == 2 && argv[1] == "--help"s)
+	if (argc == 2 && argv[1] == "--help"_s)
 	{
 		print_usage();
 		return 0;
@@ -1320,12 +1322,12 @@ int main(int argc, char* argv[])
 
 	for (int i = 2; i < argc; ++i)
 	{
-		if (argv[i] == "--help"s)
+		if (argv[i] == "--help"_s)
 		{
 			print_usage();
 			return 0;
 		}
-		else if (argv[i] == "--threads"s)
+		else if (argv[i] == "--threads"_s)
 		{
 			++i;
 			if (i >= argc)
@@ -1341,7 +1343,7 @@ int main(int argc, char* argv[])
 			}
 			if (num_threads <= 0) num_threads = 1;
 		}
-		else if (argv[i] == "--nodes"s)
+		else if (argv[i] == "--nodes"_s)
 		{
 			++i;
 			if (i >= argc)
@@ -1357,7 +1359,7 @@ int main(int argc, char* argv[])
 					, node_buffer_size);
 			}
 		}
-		else if (argv[i] == "--ping-queue"s)
+		else if (argv[i] == "--ping-queue"_s)
 		{
 			++i;
 			if (i >= argc)
@@ -1373,18 +1375,18 @@ int main(int argc, char* argv[])
 					, ping_queue_size);
 			}
 		}
-		else if (argv[i] == "--no-verify-id"s)
+		else if (argv[i] == "--no-verify-id"_s)
 		{
 			verify_node_id = false;
 		}
-		else if (argv[i] == "--ipv6"s)
+		else if (argv[i] == "--ipv6"_s)
 		{
 			++i;
 			address_v6 addr = address_v6::from_string(argv[i], ec);
 			if (!ec)
 				bind_addrs.push_back(addr);
 		}
-		else if (argv[i] == "--version"s)
+		else if (argv[i] == "--version"_s)
 		{
 			++i;
 			if (i >= argc)
