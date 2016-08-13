@@ -483,7 +483,7 @@ struct ping_queue_t
 	bool need_ping(queued_node_t* out)
 	{
 		if (m_queue.empty()) return false;
-		
+
 		time_point now = steady_clock::now();
 		if (m_queue.front().expire > now)
 			return false;
@@ -613,7 +613,7 @@ struct node_buffer_t
 
 		if (m_read_cursor == m_buffer.size())
 			m_read_cursor = 0;
-		
+
 		if (m_read_cursor <= m_buffer.size() - nodes_in_response)
 		{
 			memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_type) * nodes_in_response);
@@ -632,7 +632,7 @@ struct node_buffer_t
 		m_read_cursor = slice2;
 		return ret;
 	}
-	
+
 	void insert_node(address_type const& addr, uint16_t port, char const* node_id)
 	{
 		node_entry_type e;
@@ -1277,7 +1277,6 @@ void print_usage()
 		"                      followed by a dash and an integer.\n"
 		"\n"
 		"\n"
-
 	);
 }
 
@@ -1300,10 +1299,17 @@ void signal_handler(error_code const& e, int signo, signal_set& signals
 
 int main(int argc, char* argv[])
 {
+	using namespace std::string_literals;
 	if (argc < 2)
 	{
 		print_usage();
 		return 1;
+	}
+
+	if (argc == 2 && argv[1] == "--help"s)
+	{
+		print_usage();
+		return 0;
 	}
 
 	int num_threads = std::thread::hardware_concurrency();
@@ -1314,12 +1320,12 @@ int main(int argc, char* argv[])
 
 	for (int i = 2; i < argc; ++i)
 	{
-		if (strcmp(argv[i], "--help") == 0)
+		if (argv[i] == "--help"s)
 		{
 			print_usage();
 			return 0;
 		}
-		else if (strcmp(argv[i], "--threads") == 0)
+		else if (argv[i] == "--threads"s)
 		{
 			++i;
 			if (i >= argc)
@@ -1335,7 +1341,7 @@ int main(int argc, char* argv[])
 			}
 			if (num_threads <= 0) num_threads = 1;
 		}
-		else if (strcmp(argv[i], "--nodes") == 0)
+		else if (argv[i] == "--nodes"s)
 		{
 			++i;
 			if (i >= argc)
@@ -1351,7 +1357,7 @@ int main(int argc, char* argv[])
 					, node_buffer_size);
 			}
 		}
-		else if (strcmp(argv[i], "--ping-queue") == 0)
+		else if (argv[i] == "--ping-queue"s)
 		{
 			++i;
 			if (i >= argc)
@@ -1367,18 +1373,18 @@ int main(int argc, char* argv[])
 					, ping_queue_size);
 			}
 		}
-		else if (strcmp(argv[i], "--no-verify-id") == 0)
+		else if (argv[i] == "--no-verify-id"s)
 		{
 			verify_node_id = false;
 		}
-		else if (strcmp(argv[i], "--ipv6") == 0)
+		else if (argv[i] == "--ipv6"s)
 		{
 			++i;
 			address_v6 addr = address_v6::from_string(argv[i], ec);
 			if (!ec)
 				bind_addrs.push_back(addr);
 		}
-		else if (strcmp(argv[i], "--version") == 0)
+		else if (argv[i] == "--version"s)
 		{
 			++i;
 			if (i >= argc)
@@ -1403,6 +1409,12 @@ int main(int argc, char* argv[])
 			version[2] = version_num >> 8;
 			version[3] = version_num & 0xff;
 		}
+		else
+		{
+			fprintf(stderr, "unknown command line argument: \"%s\"\n", argv[i]);
+			print_usage();
+			return 1;
+		}
 	}
 
 	// each thread has its own ping queue, and node_buffer. Each using
@@ -1417,8 +1429,9 @@ int main(int argc, char* argv[])
 		address_v4 our_external_ip = address_v4::from_string(argv[1], ec);
 		if (ec)
 		{
-			fprintf(stderr, "invalid external IP address specified: %s\n"
-				, ec.message().c_str());
+			fprintf(stderr, "invalid external IP address specified \"%s\": (%d) %s\n"
+				, argv[1], ec.value(), ec.message().c_str());
+			print_usage();
 			return 1;
 		}
 
