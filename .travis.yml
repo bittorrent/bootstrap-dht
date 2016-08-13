@@ -1,0 +1,29 @@
+language: cpp
+
+git:
+  submodules: false
+  depth: 1
+
+cache:
+  directories:
+    - $HOME/.ccache
+
+addons:
+  apt:
+    sources:
+      - boost-latest
+      - ubuntu-toolchain-r-test
+    packages:
+      - libboost1.55-all-dev
+      - libboost1.55-tools-dev
+      - g++-5
+
+install:
+  - g++-5 --version;
+  - 'echo "using gcc : : ccache g++-5 : <cxxflags>-std=c++14 ;" > ~/user-config.jam'
+
+script:
+  - bjam -j2
+  - cd tests
+  - bjam -j2
+
