@@ -410,66 +410,35 @@ void erase_one(T& container, K const& key)
 	container.erase(i);
 }
 
+ipv6_prefix_type extract_key(address_v6 const& addr)
+{
+	ipv6_prefix_type ip6;
+	std::memcpy(ip6.data(), addr.to_bytes().data(), ip6.size());
+	return ip6;
+}
+
+address_v4::bytes_type extract_key(address_v4 const& addr)
+{
+	return addr.to_bytes();
+}
+
 template <typename Address>
-struct ip_set {};
-
-template <>
-struct ip_set<address_v4>
+struct ip_set
 {
-	bool insert(address_v4 addr)
-	{
-		return m_ips.insert(addr.to_bytes()).second;
-	}
+	bool insert(Address const& addr)
+	{ return m_ips.insert(extract_key(addr)).second; }
 
-	size_t count(address_v4 addr)
-	{
-		return m_ips.count(addr.to_bytes());
-	}
+	size_t count(Address const& addr) const
+	{ return m_ips.count(extract_key(addr)); }
 
-	void erase(address_v4 addr)
-	{
-		erase_one(m_ips, addr.to_bytes());
-	}
+	void erase(Address const& addr)
+	{ erase_one(m_ips, extract_key(addr)); }
 
-	bool operator==(ip_set const& rh)
-	{
-		return m_ips == rh.m_ips;
-	}
+	bool operator==(ip_set const& rh) const
+	{ return m_ips == rh.m_ips; }
 
-	std::unordered_set<address_v4::bytes_type> m_ips;
-};
-
-template <>
-struct ip_set<address_v6>
-{
-	bool insert(address_v6 addr)
-	{
-		return m_ips.insert(extract_prefix(addr)).second;
-	}
-
-	size_t count(address_v6 addr)
-	{
-		return m_ips.count(extract_prefix(addr));
-	}
-
-	void erase(address_v6 addr)
-	{
-		erase_one(m_ips, extract_prefix(addr));
-	}
-
-	bool operator==(ip_set const& rh)
-	{
-		return m_ips == rh.m_ips;
-	}
-
-	ipv6_prefix_type extract_prefix(address_v6 addr)
-	{
-		ipv6_prefix_type ip6;
-		memcpy(ip6.data(), addr.to_bytes().data(), ip6.size());
-		return ip6;
-	}
-
-	std::unordered_set<ipv6_prefix_type> m_ips;
+private:
+	std::unordered_set<decltype(extract_key(std::declval<Address>()))> m_ips;
 };
 
 struct ping_queue_t
