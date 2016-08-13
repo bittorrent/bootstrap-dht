@@ -51,7 +51,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <boost/system/error_code.hpp>
 #include <boost/circular_buffer.hpp>
 
-#include "lazy_entry.hpp"
+#include "bdecode.hpp"
 #include "bencode.hpp"
 
 using boost::asio::signal_set;
@@ -120,14 +120,14 @@ struct hash<ipv6_prefix_type> : hash<uint32_t>
 }
 
 /*
- 
+
 	The way the DHT bootstrapping works is by storing all
 	nodes in one circular buffer of (IP, port, node-id)-triplets.
 	In this circular buffer there are two cursors, one read
 	cursor and one write cursor.
 	When a find_nodes request comes in, we return the next
 	few nodes (or so) under the read cursor and progresses it.
-	
+
 	We remember the node that asked in a separate queue.
 	At a later time we ping it. If it responds, we
 	add it at the write cursor and progresses it.
@@ -146,8 +146,8 @@ struct hash<ipv6_prefix_type> : hash<uint32_t>
 
 
 	[1]: http://libtorrent.org/dht_sec.html
- 
- */
+
+*/
 
 std::atomic<uint64_t> incoming_queries;
 std::atomic<uint64_t> invalid_encoding;
@@ -483,7 +483,7 @@ struct ping_queue_t
 	bool need_ping(queued_node_t* out)
 	{
 		if (m_queue.empty()) return false;
-		
+
 		time_point now = steady_clock::now();
 		if (m_queue.front().expire > now)
 			return false;
@@ -613,7 +613,7 @@ struct node_buffer_t
 
 		if (m_read_cursor == m_buffer.size())
 			m_read_cursor = 0;
-		
+
 		if (m_read_cursor <= m_buffer.size() - nodes_in_response)
 		{
 			memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_type) * nodes_in_response);
@@ -632,7 +632,7 @@ struct node_buffer_t
 		m_read_cursor = slice2;
 		return ret;
 	}
-	
+
 	void insert_node(address_type const& addr, uint16_t port, char const* node_id)
 	{
 		node_entry_type e;
@@ -996,8 +996,8 @@ struct router_thread
 	{
 		error_code ec;
 
-		using libtorrent::lazy_entry;
-		using libtorrent::lazy_bdecode;
+		using libtorrent::bdecode_node;
+		using libtorrent::bdecode;
 
 		if (ep.port() == 0)
 		{
@@ -1007,9 +1007,10 @@ struct router_thread
 
 		bool is_v4 = ep.protocol() == udp::v4();
 
-		lazy_entry e;
-		int ret = lazy_bdecode(sock.packet, &sock.packet[len], e, ec, nullptr, 5, 100);
-		if (ec || ret != 0 || e.type() != lazy_entry::dict_t)
+		bdecode_node e;
+		std::error_code err;
+		int const ret = bdecode(sock.packet, &sock.packet[len], e, err, nullptr, 5, 100);
+		if (err || ret != 0 || e.type() != bdecode_node::dict_t)
 		{
 			++invalid_encoding;
 			return;
@@ -1027,7 +1028,7 @@ struct router_thread
 #endif
 		//		printf("R: %s\n", print_entry(e, true).c_str());
 
-		if (e.type() != lazy_entry::dict_t)
+		if (e.type() != bdecode_node::dict_t)
 		{
 			++invalid_encoding;
 			return;
@@ -1040,14 +1041,14 @@ struct router_thread
 
 		std::string cmd = e.dict_find_string_value("q");
 
-		lazy_entry const* a = e.dict_find_dict("a");
+		bdecode_node a = e.dict_find_dict("a");
 		if (!a)
 		{
 			a = e.dict_find_dict("r");
 			if (!a) return;
 		}
-		lazy_entry const* node_id = a->dict_find_string("id");
-		if (!node_id || node_id->string_length() != 20) return;
+		bdecode_node node_id = a.dict_find_string("id");
+		if (!node_id || node_id.string_length() != 20) return;
 
 		// build the IP response buffer, with the source
 		// IP and port that we observe from this node
@@ -1084,16 +1085,16 @@ struct router_thread
 			{
 				// verify that the node ID is valid for the source IP
 				node_id_type h;
-				generate_id(ep.address(), node_id->string_ptr()[19], h.data());
-				if (!compare_id_prefix(node_id->string_ptr(), h.data()))
+				generate_id(ep.address(), node_id.string_ptr()[19], h.data());
+				if (!compare_id_prefix(node_id.string_ptr(), h.data()))
 				{
 					if (ep.address().is_v6())
 						return;
 
 					// backwards compatibility. We'll save a lot of CPU
 					// once we can remove this
-					generate_id_sha1(ep.address(), node_id->string_ptr()[19], h.data());
-					if (memcmp(node_id->string_ptr(), h.data(), 4) != 0)
+					generate_id_sha1(ep.address(), node_id.string_ptr()[19], h.data());
+					if (memcmp(node_id.string_ptr(), h.data(), 4) != 0)
 					{
 						++failed_nodeid_queries;
 						return;
@@ -1103,14 +1104,14 @@ struct router_thread
 
 			++added_nodes;
 			if (is_v4)
-				node_buffer4.insert_node(ep.address().to_v4(), ep.port(), node_id->string_ptr());
+				node_buffer4.insert_node(ep.address().to_v4(), ep.port(), node_id.string_ptr());
 			else
-				node_buffer6.insert_node(ep.address().to_v6(), ep.port(), node_id->string_ptr());
+				node_buffer6.insert_node(ep.address().to_v6(), ep.port(), node_id.string_ptr());
 		}
 		else if (cmd == "ping"
-				 || cmd == "find_node"
-				 || cmd == "get_peers"
-				 || cmd == "get")
+			|| cmd == "find_node"
+			|| cmd == "get_peers"
+			|| cmd == "get")
 		{
 			bencoder b(response, sizeof(response));
 			b.open_dict();
@@ -1135,17 +1136,17 @@ struct router_thread
 			{
 				bool want_v4 = false, want_v6 = false;
 
-				lazy_entry const* want = a->dict_find_list("want");
+				bdecode_node const want = a.dict_find_list("want");
 				if (want)
 				{
-					for (int i = 0; i < want->list_size(); ++i)
+					for (int i = 0; i < want.list_size(); ++i)
 					{
-						lazy_entry const* w = want->list_at(i);
-						if (w->type() != lazy_entry::string_t) continue;
-						if (w->string_length() != 2) continue;
-						if (memcmp(w->string_ptr(), "n4", 2) == 0)
+						bdecode_node const w = want.list_at(i);
+						if (w.type() != bdecode_node::string_t) continue;
+						if (w.string_length() != 2) continue;
+						if (std::memcmp(w.string_ptr(), "n4", 2) == 0)
 							want_v4 = true;
-						else if (memcmp(w->string_ptr(), "n6", 2) == 0)
+						else if (std::memcmp(w.string_ptr(), "n6", 2) == 0)
 							want_v6 = true;
 					}
 				}
@@ -1197,8 +1198,8 @@ struct router_thread
 			if (!is_valid_ip(ep)) return;
 
 			// don't save read-only nodes
-			lazy_entry const* ro = e.dict_find_int("ro");
-			if (ro && ro->int_value() != 0) return;
+			bdecode_node ro = e.dict_find_int("ro");
+			if (ro && ro.int_value() != 0) return;
 
 			// don't add the same IP multiple times in a row
 			if (is_v4 &&
@@ -1207,7 +1208,7 @@ struct router_thread
 				node_entry_v4 e;
 				e.ip = ep.address().to_v4().to_bytes();
 				e.port = htons(ep.port());
-				memcpy(e.node_id.data(), node_id, e.node_id.size());
+				std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
 				last_nodes4.push_back(e);
 			}
 			else if (!is_v4 &&
@@ -1216,12 +1217,12 @@ struct router_thread
 				node_entry_v6 e;
 				e.ip = ep.address().to_v6().to_bytes();
 				e.port = htons(ep.port());
-				memcpy(e.node_id.data(), node_id, e.node_id.size());
+				std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
 				last_nodes6.push_back(e);
 			}
 
 			// ping this node later, we may want to add it to our node buffer
-			ping_queue.insert_node(ep, node_id->string_ptr(), sock);
+			ping_queue.insert_node(ep, node_id.string_ptr(), sock);
 		}
 	}
 
