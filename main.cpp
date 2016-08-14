@@ -496,7 +496,7 @@ struct ping_queue_t
 		std::uint32_t const expire = duration_cast<seconds>(
 			steady_clock::now() + minutes(15) - m_created).count();
 
-		m_queue.push_back({addr.to_bytes(), std::uint32_t(sock_idx), expire, port});
+		m_queue.push_back({addr.to_bytes(), expire, std::uint16_t(sock_idx), port});
 		m_ips.insert(addr);
 	}
 
@@ -508,12 +508,12 @@ private:
 	{
 		typename Address::bytes_type addr;
 
-		// the index of the socket this node was seen on, and should be pinged
-		// back via
-		std::uint32_t sock_idx:2;
-
 		// expiration in seconds (relative to the ping_queue creation time)
 		std::uint32_t expire:30;
+
+		// the index of the socket this node was seen on, and should be pinged
+		// back via
+		std::uint16_t sock_idx;
 
 		std::uint16_t port;
 	};
