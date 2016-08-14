@@ -1247,7 +1247,6 @@ void print_usage()
 		"                      followed by a dash and an integer.\n"
 		"\n"
 		"\n"
-
 	);
 }
 
@@ -1268,12 +1267,21 @@ void signal_handler(error_code const& e, int signo, signal_set& signals
 	ios.stop();
 };
 
+std::string operator "" _s(const char* str, size_t len)
+{ return std::string(str, len); }
+
 int main(int argc, char* argv[])
 {
 	if (argc < 2)
 	{
 		print_usage();
 		return 1;
+	}
+
+	if (argc == 2 && argv[1] == "--help"_s)
+	{
+		print_usage();
+		return 0;
 	}
 
 	int num_threads = std::thread::hardware_concurrency();
@@ -1284,12 +1292,12 @@ int main(int argc, char* argv[])
 
 	for (int i = 2; i < argc; ++i)
 	{
-		if (strcmp(argv[i], "--help") == 0)
+		if (argv[i] == "--help"_s)
 		{
 			print_usage();
 			return 0;
 		}
-		else if (strcmp(argv[i], "--threads") == 0)
+		else if (argv[i] == "--threads"_s)
 		{
 			++i;
 			if (i >= argc)
@@ -1305,7 +1313,7 @@ int main(int argc, char* argv[])
 			}
 			if (num_threads <= 0) num_threads = 1;
 		}
-		else if (strcmp(argv[i], "--nodes") == 0)
+		else if (argv[i] == "--nodes"_s)
 		{
 			++i;
 			if (i >= argc)
@@ -1321,7 +1329,7 @@ int main(int argc, char* argv[])
 					, node_buffer_size);
 			}
 		}
-		else if (strcmp(argv[i], "--ping-queue") == 0)
+		else if (argv[i] == "--ping-queue"_s)
 		{
 			++i;
 			if (i >= argc)
@@ -1337,18 +1345,18 @@ int main(int argc, char* argv[])
 					, ping_queue_size);
 			}
 		}
-		else if (strcmp(argv[i], "--no-verify-id") == 0)
+		else if (argv[i] == "--no-verify-id"_s)
 		{
 			verify_node_id = false;
 		}
-		else if (strcmp(argv[i], "--ipv6") == 0)
+		else if (argv[i] == "--ipv6"_s)
 		{
 			++i;
 			address_v6 addr = address_v6::from_string(argv[i], ec);
 			if (!ec)
 				bind_addrs.push_back(addr);
 		}
-		else if (strcmp(argv[i], "--version") == 0)
+		else if (argv[i] == "--version"_s)
 		{
 			++i;
 			if (i >= argc)
@@ -1373,6 +1381,12 @@ int main(int argc, char* argv[])
 			version[2] = version_num >> 8;
 			version[3] = version_num & 0xff;
 		}
+		else
+		{
+			fprintf(stderr, "unknown command line argument: \"%s\"\n", argv[i]);
+			print_usage();
+			return 1;
+		}
 	}
 
 	// each thread has its own ping queue, and node_buffer. Each using
@@ -1387,8 +1401,9 @@ int main(int argc, char* argv[])
 		address_v4 our_external_ip = address_v4::from_string(argv[1], ec);
 		if (ec)
 		{
-			fprintf(stderr, "invalid external IP address specified: %s\n"
-				, ec.message().c_str());
+			fprintf(stderr, "invalid external IP address specified \"%s\": (%d) %s\n"
+				, argv[1], ec.value(), ec.message().c_str());
+			print_usage();
 			return 1;
 		}
 
