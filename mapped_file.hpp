@@ -30,7 +30,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <cassert>
 #include <unistd.h> // for open/close
 #include <cstring> // for memcpy
-#include <algorithm> // for std::max
 
 struct file
 {
@@ -89,7 +88,7 @@ struct mapped_vector
 {
 	// the header must be large enough to make the first element still be
 	// correctly aligned
-	static constexpr size_t header_size = std::max(size_t(16), alignof(T));
+	static constexpr size_t header_size = (16 > alignof(T)) ? alignof(T) : 16;
 
 	mapped_vector(char const* file, size_t const size)
 		: m_map(file, header_size + size * sizeof(T))
