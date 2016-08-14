@@ -1,0 +1,14 @@
+import testing ;
+import feature : feature ;
+
+project
+	: requirements
+	<include>..
+	: default-build
+;
+
+test-suite dht-bootstrap :
+	[ run test_mapped_file.cpp ]
+	[ run test_mapped_vector.cpp ]
+;
+
