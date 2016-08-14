@@ -25,37 +25,40 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <sys/stat.h>
 #include <unistd.h> // for unlink
 
-int main()
+#define CATCH_CONFIG_MAIN
+#include "catch.hpp"
+
+TEST_CASE("mapped_vector")
 {
 	unlink("test_file2");
 	{
 		mapped_vector<int> mv("test_file2", 30);
-		assert(mv.size() == 0);
-		assert(mv.capacity() == 30);
+		CHECK(mv.size() == 0);
+		CHECK(mv.capacity() == 30);
 
 		for (int i = 0; i < 10; ++i) {
 			mv.emplace_back(i);
 		}
 
-		assert(mv.size() == 10);
+		CHECK(mv.size() == 10);
 	}
 
 	{
 		// make sure the size of the vector (not the capacity) is correctly
 		// restored when loading it back up again
 		mapped_vector<int> mv("test_file2", 30);
-		assert(mv.size() == 10);
-		assert(mv.capacity() == 30);
+		CHECK(mv.size() == 10);
+		CHECK(mv.capacity() == 30);
 		for (int i = 0; i < 10; ++i) {
-			assert(mv[i] == i);
+			CHECK(mv[i] == i);
 		}
 	}
 
 	// make sure the size is capped at the capacity, if the capacity is shrunk
 	{
 		mapped_vector<int> mv("test_file2", 5);
-		assert(mv.size() == 5);
-		assert(mv.capacity() == 5);
+		CHECK(mv.size() == 5);
+		CHECK(mv.capacity() == 5);
 	}
 
 	unlink("test_file2");

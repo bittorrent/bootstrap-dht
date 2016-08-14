@@ -1,7 +1,9 @@
 /*
 The MIT License (MIT)
 
-Copyright (c) 2016 Arvid Norberg
+Copyright (c) 2013-2014 BitTorrent Inc.
+
+author: Arvid Norberg
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
@@ -21,33 +23,9 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include "mapped_file.hpp"
-#include <sys/stat.h>
-#include <unistd.h> // for unlink
+#pragma once
 
-#define CATCH_CONFIG_MAIN
-#include "catch.hpp"
+#include <array>
 
-TEST_CASE("mapped_file")
-{
-	unlink("test_file1");
-	{
-		mapped_file mf("test_file1", 10 * sizeof(int));
-		for (int i = 0; i < 10; ++i) {
-			static_cast<int*>(mf.data())[i] = i;
-		}
-	}
-
-	struct stat st;
-	stat("test_file1", &st);
-	CHECK(st.st_size == 10 * sizeof(int));
-
-	{
-		mapped_file mf("test_file1", 10 * sizeof(int));
-		for (int i = 0; i < 10; ++i) {
-			CHECK(static_cast<int*>(mf.data())[i] == i);
-		}
-	}
-	unlink("test_file1");
-}
+using node_id_type = std::array<char, 20>;
 

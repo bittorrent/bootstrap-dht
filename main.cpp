@@ -3,7 +3,7 @@ The MIT License (MIT)
 
 Copyright (c) 2013-2014 BitTorrent Inc.
 
-author: Arvid Norberg
+author: Arvid Norberg, Steven Siloti
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
@@ -45,6 +45,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <mutex>
 #include <unordered_map>
 #include <cinttypes> // for PRId64
+#include <array>
 
 #include <boost/uuid/sha1.hpp>
 #include <boost/crc.hpp>
@@ -54,6 +55,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "bdecode.hpp"
 #include "bencode.hpp"
 #include "mapped_file.hpp"
+#include "node_buffer.hpp"
+#include "ip_set.hpp"
 
 using boost::asio::signal_set;
 using boost::asio::io_service;
@@ -76,10 +79,6 @@ using time_point = steady_clock::time_point;
 
 using node_id_type = std::array<char, 20>;
 
-// The size of ipv6_prefix_type determines the size of the prefix to compare
-// when determining if an IPv6 address should be discarded as a duplicate
-using ipv6_prefix_type = std::array<unsigned char, 6>;
-
 const int print_stats_interval = 60;
 const int rotate_secrets_interval = 600;
 const int nodes_in_response = 16;
@@ -91,34 +90,6 @@ bool verify_node_id = true;
 std::mutex client_mutex;
 std::unordered_map<uint16_t, int> client_histogram;
 #endif
-
-namespace std {
-
-template <>
-struct hash<address_v4::bytes_type> : hash<uint32_t>
-{
-	size_t operator()(address_v4::bytes_type ip) const
-	{
-		uint32_t arg;
-		std::memcpy(&arg, &ip[0], 4);
-		return this->hash<uint32_t>::operator()(arg);
-	}
-};
-
-template <>
-struct hash<ipv6_prefix_type> : hash<uint32_t>
-{
-	size_t operator()(ipv6_prefix_type ip) const
-	{
-		// this is the crc32c (Castagnoli) polynomial
-		boost::crc_optimal<32, 0x1EDC6F41, 0xFFFFFFFF, 0xFFFFFFFF, true, true> crc;
-		crc.process_block(ip.data(), ip.data() + ip.size());
-		uint32_t arg = crc.checksum();
-		return this->hash<uint32_t>::operator()(arg);
-	}
-};
-
-}
 
 /*
 
@@ -390,45 +361,6 @@ struct bound_socket
 	char packet[1500];
 };
 
-template <typename T, typename K>
-void erase_one(T& container, K const& key)
-{
-	typename T::iterator i = container.find(key);
-	assert(i != container.end());
-	container.erase(i);
-}
-
-ipv6_prefix_type extract_key(address_v6 const& addr)
-{
-	ipv6_prefix_type ip6;
-	std::memcpy(ip6.data(), addr.to_bytes().data(), ip6.size());
-	return ip6;
-}
-
-address_v4::bytes_type extract_key(address_v4 const& addr)
-{
-	return addr.to_bytes();
-}
-
-template <typename Address>
-struct ip_set
-{
-	bool insert(Address const& addr)
-	{ return m_ips.insert(extract_key(addr)).second; }
-
-	size_t count(Address const& addr) const
-	{ return m_ips.count(extract_key(addr)); }
-
-	void erase(Address const& addr)
-	{ erase_one(m_ips, extract_key(addr)); }
-
-	bool operator==(ip_set const& rh) const
-	{ return m_ips == rh.m_ips; }
-
-private:
-	std::unordered_set<decltype(extract_key(std::declval<Address>()))> m_ips;
-};
-
 struct queued_node_t
 {
 	udp::endpoint ep;
@@ -535,148 +467,11 @@ private:
 	std::uint8_t m_round_robin = 0;
 };
 
-// this is the type of each node entry
-// in the circular buffer
-template <typename Address>
-struct node_entry_t
-{
-	node_id_type node_id;
-	typename Address::bytes_type ip;
-	uint16_t port;
-};
+using node_entry_v4 = typename node_buffer<address_v4>::node_entry_t;
+using node_entry_v6 = typename node_buffer<address_v6>::node_entry_t;
 
-using node_entry_v4 = node_entry_t<address_v4>;
-using node_entry_v6 = node_entry_t<address_v6>;
-
-template <typename Address>
-struct node_buffer_t
-{
-	using address_type = Address;
-	using node_entry_type = node_entry_t<address_type>;
-
-	node_buffer_t(char const* filename)
-		: m_last_write_loop(steady_clock::now())
-		, m_buffer(filename, node_buffer_size)
-	{}
-
-	bool empty() const { return m_buffer.empty(); }
-
-	int size() const { return m_current_max_size; }
-
-	// TODO: try to avoid heap allocations here
-	std::string get_nodes()
-	{
-		std::string ret;
-
-		if (m_buffer.size() < nodes_in_response)
-		{
-			ret.resize(m_buffer.size() * sizeof(node_entry_type));
-			if (ret.size() > 0)
-				memcpy(&ret[0], &m_buffer[0], m_buffer.size() * sizeof(node_entry_type));
-
-			m_read_cursor = 0;
-			return ret;
-		}
-
-		ret.resize(nodes_in_response * sizeof(node_entry_type));
-
-		if (m_read_cursor == m_buffer.size())
-			m_read_cursor = 0;
-
-		if (m_read_cursor <= m_buffer.size() - nodes_in_response)
-		{
-			memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_type) * nodes_in_response);
-			m_read_cursor += nodes_in_response;
-			return ret;
-		}
-
-		int const slice1 = m_buffer.size() - m_read_cursor;
-		assert(slice1 < nodes_in_response);
-		memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_type) * slice1);
-		m_read_cursor += slice1;
-
-		int const slice2 = nodes_in_response - slice1;
-		memcpy(&ret[slice1 * sizeof(node_entry_type)], &m_buffer[0]
-			, sizeof(node_entry_type) * slice2);
-		m_read_cursor = slice2;
-		return ret;
-	}
-
-	void insert_node(address_type const& addr, uint16_t const port, char const* node_id)
-	{
-		node_entry_type e;
-		e.ip = addr.to_bytes();
-		e.port = htons(port);
-		memcpy(e.node_id.data(), node_id, e.node_id.size());
-
-		// we're not supposed to add 0.0.0.0
-		assert(!addr.is_unspecified());
-
-		// only allow once entry per IP
-		if (m_ips.count(address_type(e.ip))) return;
-
-		auto now = steady_clock::now();
-		if (m_write_cursor == m_current_max_size
-			&& m_last_write_loop + minutes(15) > now)
-		{
-			// we're about to wrap the write cursor, but it's been less
-			// than 15 minutes since last time we wrapped, so extend
-			// the buffer
-			m_current_max_size = (std::min)(m_current_max_size * 2, node_buffer_size);
-		}
-
-		// this test must be here even though it's also tested
-		// in the above if-statement. If we try to grow the buffer
-		// size, we may still be stuck at the upper limit, in which
-		// case we still need to wrap
-		if (m_write_cursor == m_current_max_size)
-		{
-#ifdef DEBUG_STATS
-			printf("write cursor wrapping. %d minutes\n"
-				, duration_cast<minutes>(now - m_last_write_loop).count());
-#endif
-			m_write_cursor = 0;
-			m_last_write_loop = now;
-		}
-
-		if (m_buffer.size() < m_current_max_size)
-		{
-			m_buffer.emplace_back(e);
-			m_ips.insert(address_type(e.ip));
-			++m_write_cursor;
-			return;
-		}
-
-		// remove the IP we're overwriting from our IP set
-		m_ips.erase(address_type(m_buffer[m_write_cursor].ip));
-		m_buffer[m_write_cursor] = e;
-		// and add the one we just put in
-		m_ips.insert(address_type(e.ip));
-		++m_write_cursor;
-	}
-
-private:
-
-	int m_read_cursor = 0;
-	int m_write_cursor = 0;
-
-	// the current max size we use for the node buffer. If it's churning too
-	// frequently, we grow it
-	int m_current_max_size = 99;
-
-	// the last time we looped the write cursor. If this is less than 15 minutes
-	// we double the size of the buffer (capped at the specified size)
-	steady_clock::time_point m_last_write_loop;
-
-	mapped_vector<node_entry_type> m_buffer;
-
-	// this is a set of all IPs that's currently in the buffer. We only allow
-	// one instance of each IP
-	ip_set<address_type> m_ips;
-};
-
-using node_buffer_v4 = node_buffer_t<address_v4>;
-using node_buffer_v6 = node_buffer_t<address_v6>;
+using node_buffer_v4 = node_buffer<address_v4>;
+using node_buffer_v6 = node_buffer<address_v6>;
 
 // TODO: avoid heap allocation here
 std::string compute_tid(uint8_t const* secret, char const* remote_ip, size_t ip_len)
@@ -802,8 +597,8 @@ std::string storage_filename(char const* base_path, int const threadid, bool con
 struct router_thread
 {
 	router_thread(char const* storage_dir, int const tid, std::vector<address> addrs)
-		: node_buffer4(storage_filename(storage_dir, tid, false).c_str())
-		, node_buffer6(storage_filename(storage_dir, tid, true).c_str())
+		: node_buffer4(storage_filename(storage_dir, tid, false).c_str(), node_buffer_size)
+		, node_buffer6(storage_filename(storage_dir, tid, true).c_str(), node_buffer_size)
 		, signals(ios)
 		, threadid(tid)
 	{
@@ -952,13 +747,13 @@ struct router_thread
 	}
 
 	template <typename Address>
-	std::string get_nodes(node_buffer_t<Address>& node_buffer
-		, boost::circular_buffer<node_entry_t<Address>>& last_nodes)
+	std::string get_nodes(node_buffer<Address>& buffer
+		, boost::circular_buffer<typename node_buffer<Address>::node_entry_t>& last_nodes)
 	{
-		const size_t entry_size = sizeof(node_entry_t<Address>);
-		std::string nodes = node_buffer.get_nodes();
+		size_t const entry_size = sizeof(typename node_buffer<Address>::node_entry_t);
+		std::string nodes = buffer.get_nodes(nodes_in_response);
 
-		int num_nodes = nodes.size() / entry_size;
+		int const num_nodes = nodes.size() / entry_size;
 		if (num_nodes < nodes_in_response && last_nodes.size() > 0)
 		{
 			// fill in with lower quality nodes, since
@@ -977,7 +772,7 @@ struct router_thread
 		return nodes;
 	}
 
-	void process_incoming_packet(bound_socket& sock, size_t len)
+	void process_incoming_packet(bound_socket& sock, size_t const len)
 	{
 		error_code ec;
 
