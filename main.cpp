@@ -495,6 +495,8 @@ struct router_thread
 		, ping_queue6(ping_queue_size)
 		, node_buffer4(storage_filename(storage_dir, tid, false).c_str(), node_buffer_size)
 		, node_buffer6(storage_filename(storage_dir, tid, true).c_str(), node_buffer_size)
+		, last_nodes4(16)
+		, last_nodes6(16)
 		, signals(ios)
 		, threadid(tid)
 	{
@@ -872,8 +874,7 @@ struct router_thread
 			else if (len <= 0)
 				fprintf(stderr, "send_to failed: return=%d\n", len);
 
-			// filter obvious invalid IPs, and IPv6 (since we only support
-			// IPv4 for now)
+			// filter obvious invalid IPs
 			if (!is_valid_ip(ep)) return;
 
 			// don't save read-only nodes
