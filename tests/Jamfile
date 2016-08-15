@@ -15,5 +15,6 @@ test-suite dht-bootstrap :
 	[ run test_mapped_file.cpp ]
 	[ run test_mapped_vector.cpp ]
 	[ run test_ip_set.cpp ]
+	[ run test_node_buffer.cpp ]
 ;
 

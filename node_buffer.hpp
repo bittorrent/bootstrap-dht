@@ -27,7 +27,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #pragma once
 
 #include <array>
+#include <algorithm>
 #include "ip_set.hpp"
+#include "mapped_file.hpp" // for mapped_vector
 
 template <typename Address>
 struct node_buffer
@@ -46,10 +48,27 @@ struct node_buffer
 	};
 
 	node_buffer(char const* filename, size_t const capacity)
-		: m_capacity(capacity)
+		: m_current_max_size(std::min(size_t(99), capacity))
+		, m_capacity(capacity)
 		, m_last_write_loop(steady_clock::now())
 		, m_buffer(filename, capacity)
-	{}
+	{
+		// if we picked up nodes from the previous session, we need to restore our
+		// set of IPs too (used to disallow duplicates) as well as making sure the
+		// current_max_size and write cursors are set correctly
+		if (m_buffer.size() > 0) {
+			for (node_entry_t const& e : m_buffer) {
+				m_ips.insert(address_type(e.ip));
+			}
+			m_write_cursor = m_buffer.size();
+			if (m_current_max_size < m_buffer.size()) {
+				m_current_max_size = m_buffer.size();
+			}
+			if (m_write_cursor >= m_current_max_size) {
+				m_write_cursor = 0;
+			}
+		}
+	}
 
 	bool empty() const { return m_buffer.empty(); }
 
@@ -94,7 +113,8 @@ struct node_buffer
 		return ret;
 	}
 
-	void insert_node(address_type const& addr, uint16_t port, char const* node_id)
+	// returns whether the node was inserted or not
+	bool insert_node(address_type const& addr, uint16_t port, char const* node_id)
 	{
 		using std::chrono::minutes;
 
@@ -106,8 +126,8 @@ struct node_buffer
 		// we're not supposed to add 0.0.0.0
 		assert(!addr.is_unspecified());
 
-		// only allow once entry per IP
-		if (m_ips.count(address_type(e.ip))) return;
+		// only allow one entry per IP
+		if (m_ips.count(address_type(e.ip))) return false;
 
 		auto now = steady_clock::now();
 		if (m_write_cursor == m_current_max_size
@@ -138,7 +158,7 @@ struct node_buffer
 			m_buffer.emplace_back(e);
 			m_ips.insert(address_type(e.ip));
 			++m_write_cursor;
-			return;
+			return true;
 		}
 
 		// remove the IP we're overwriting from our IP set
@@ -147,6 +167,7 @@ struct node_buffer
 		// and add the one we just put in
 		m_ips.insert(address_type(e.ip));
 		++m_write_cursor;
+		return true;
 	}
 
 private:
@@ -156,7 +177,7 @@ private:
 
 	// the current max size we use for the node buffer. If it's churning too
 	// frequently, we grow it
-	int m_current_max_size = 99;
+	int m_current_max_size;
 
 	int const m_capacity;
 

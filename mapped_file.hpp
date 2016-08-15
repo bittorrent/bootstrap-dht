@@ -88,7 +88,7 @@ struct mapped_vector
 {
 	// the header must be large enough to make the first element still be
 	// correctly aligned
-	static constexpr size_t header_size = (16 > alignof(T)) ? alignof(T) : 16;
+	static constexpr size_t header_size = (16 < alignof(T)) ? alignof(T) : 16;
 
 	mapped_vector(char const* file, size_t const size)
 		: m_map(file, header_size + size * sizeof(T))
@@ -113,6 +113,11 @@ struct mapped_vector
 	T const* data() const { return m_array; }
 	size_t size() const { return m_size; }
 	size_t capacity() const { return (m_map.size() - header_size) / sizeof(T); }
+
+	T* begin() { return m_array; }
+	T const* begin() const { return m_array; }
+	T* end() { return m_array + m_size; }
+	T const* end() const { return m_array + m_size; }
 
 	template<typename... Args>
 	void emplace_back(Args... args)

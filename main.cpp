@@ -54,7 +54,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "bdecode.hpp"
 #include "bencode.hpp"
-#include "mapped_file.hpp"
 #include "node_buffer.hpp"
 #include "ip_set.hpp"
 
@@ -882,11 +881,14 @@ struct router_thread
 				}
 			}
 
-			++added_nodes;
-			if (is_v4)
-				node_buffer4.insert_node(ep.address().to_v4(), ep.port(), node_id.string_ptr());
-			else
-				node_buffer6.insert_node(ep.address().to_v6(), ep.port(), node_id.string_ptr());
+			if (is_v4) {
+				added_nodes += node_buffer4.insert_node(ep.address().to_v4()
+					, ep.port(), node_id.string_ptr());
+			}
+			else {
+				added_nodes += node_buffer6.insert_node(ep.address().to_v6()
+					, ep.port(), node_id.string_ptr());
+			}
 		}
 		else if (cmd == "ping"
 			|| cmd == "find_node"
