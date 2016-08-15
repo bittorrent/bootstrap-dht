@@ -56,6 +56,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "bencode.hpp"
 #include "node_buffer.hpp"
 #include "ip_set.hpp"
+#include "ping_queue.hpp"
 
 using boost::asio::signal_set;
 using boost::asio::io_service;
@@ -360,112 +361,6 @@ struct bound_socket
 	char packet[1500];
 };
 
-struct queued_node_t
-{
-	udp::endpoint ep;
-	int sock_idx;
-};
-
-template <typename Address>
-struct ping_queue_t
-{
-	ping_queue_t() {}
-
-	// asks the ping-queue if there is another node that
-	// should be pinged right now. Returns false if not.
-	bool need_ping(queued_node_t* out)
-	{
-		if (m_queue.empty()) return false;
-
-		time_point const now = steady_clock::now();
-
-		// this is the number of seconds since the queue was constructed. This is
-		// compared against the expiration times on the queue entries
-		int const time_out = duration_cast<std::chrono::seconds>(
-			now - m_created).count();
-
-		if (m_queue.front().expire > time_out) return false;
-		auto ent = m_queue.front();
-		m_queue.pop_front();
-		m_ips.erase(Address(ent.addr));
-
-		out->ep = udp::endpoint(Address(ent.addr), ent.port);
-		out->sock_idx = ent.sock_idx;
-
-		return true;
-	}
-
-	void insert_node(Address const& addr, std::uint16_t const port, int const sock_idx)
-	{
-		assert(addr != Address::any());
-
-		// prevent duplicate entries
-		if (m_ips.count(addr)) return;
-
-		// the number of nodes we allow in the queue before we start dropping
-		// nodes (to stay below the limi)
-		size_t const low_watermark = ping_queue_size / 2;
-
-		if (m_queue.size() > low_watermark) {
-			// as the size approaches the limit, increasingly reject
-			// new nodes, to distribute nodes we ping more evenly
-			// over time.
-			// we don't start dropping nodes until we exceed the low watermark, but
-			// once we do, we increase the drop rate the closer we get to the limit
-			++m_round_robin;
-			if (m_round_robin < (m_queue.size() - low_watermark) * 256 / (ping_queue_size - low_watermark))
-				return;
-		}
-
-		// we primarily want to keep quality nodes in our list.
-		// in 10 minutes, any pin-hole the node may have had open to
-		// us is likely to have been closed. If the node responds
-		// in 15 minutes from now, it's likely to either have a full-cone
-		// NAT or not be NATed at all (which is the way we like our nodes).
-		// also, it still being up is a good predictor for it staying up
-		// longer as well.
-		std::uint32_t const expire = duration_cast<seconds>(
-			steady_clock::now() + minutes(15) - m_created).count();
-
-		m_queue.push_back({addr.to_bytes(), expire, std::uint16_t(sock_idx), port});
-		m_ips.insert(addr);
-	}
-
-private:
-
-	// this is the type of each node queued up to be pinged at some point in the
-	// future
-	struct queue_entry_t
-	{
-		typename Address::bytes_type addr;
-
-		// expiration in seconds (relative to the ping_queue creation time)
-		std::uint32_t expire:30;
-
-		// the index of the socket this node was seen on, and should be pinged
-		// back via
-		std::uint16_t sock_idx;
-
-		std::uint16_t port;
-	};
-
-	// the set of IPs in the queue. An IP is only allowed to appear once
-	ip_set<Address> m_ips;
-
-	// the queue of nodes we should ping, ordered by the
-	// time they were added
-	// TODO: it would be nice to keep the ping queue in a memory mapped file as
-	// well
-	std::deque<queue_entry_t> m_queue;
-
-	steady_clock::time_point const m_created = steady_clock::now();
-
-	// this is a wrapping counter used to determine the probability of dropping
-	// this node when the queue is under pressure. It's deliberately meant to
-	// wrap at 256.
-	std::uint8_t m_round_robin = 0;
-};
-
 using node_entry_v4 = typename node_buffer<address_v4>::node_entry_t;
 using node_entry_v6 = typename node_buffer<address_v6>::node_entry_t;
 
@@ -596,7 +491,9 @@ std::string storage_filename(char const* base_path, int const threadid, bool con
 struct router_thread
 {
 	router_thread(char const* storage_dir, int const tid, std::vector<address> addrs)
-		: node_buffer4(storage_filename(storage_dir, tid, false).c_str(), node_buffer_size)
+		: ping_queue4(ping_queue_size)
+		, ping_queue6(ping_queue_size)
+		, node_buffer4(storage_filename(storage_dir, tid, false).c_str(), node_buffer_size)
 		, node_buffer6(storage_filename(storage_dir, tid, true).c_str(), node_buffer_size)
 		, signals(ios)
 		, threadid(tid)
@@ -1014,8 +911,8 @@ struct router_thread
 	io_service ios;
 	std::vector<bound_socket> socks;
 
-	ping_queue_t<address_v4> ping_queue4;
-	ping_queue_t<address_v6> ping_queue6;
+	ping_queue<address_v4> ping_queue4;
+	ping_queue<address_v6> ping_queue6;
 	node_buffer_v4 node_buffer4;
 	node_buffer_v6 node_buffer6;
 
