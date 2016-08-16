@@ -25,7 +25,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <sys/stat.h>
 #include <unistd.h> // for unlink
 
-int main()
+#define CATCH_CONFIG_MAIN
+#include "catch.hpp"
+
+TEST_CASE("mapped_file")
 {
 	unlink("test_file1");
 	{
@@ -37,13 +40,12 @@ int main()
 
 	struct stat st;
 	stat("test_file1", &st);
-	fprintf(stderr, "file size: %lld\n", st.st_size);
-	assert(st.st_size == 10 * sizeof(int));
+	CHECK(st.st_size == 10 * sizeof(int));
 
 	{
 		mapped_file mf("test_file1", 10 * sizeof(int));
 		for (int i = 0; i < 10; ++i) {
-			assert(static_cast<int*>(mf.data())[i] == i);
+			CHECK(static_cast<int*>(mf.data())[i] == i);
 		}
 	}
 	unlink("test_file1");
