@@ -46,20 +46,24 @@ struct queued_node_t
 template <typename Address>
 struct ping_queue
 {
-	explicit ping_queue(size_t const capacity)
-		: m_capacity(capacity)
-	{}
-
 	using steady_clock = std::chrono::steady_clock;
 	using time_point = steady_clock::time_point;
 
+	ping_queue(size_t const capacity, time_point const now)
+		: m_capacity(capacity)
+		, m_created(now)
+	{}
+
+	size_t size() const
+	{
+		return m_queue.size();
+	}
+
 	// asks the ping-queue if there is another node that
 	// should be pinged right now. Returns false if not.
-	bool need_ping(queued_node_t* out)
+	bool need_ping(queued_node_t* out, time_point const now)
 	{
 		if (m_queue.empty()) return false;
-
-		time_point const now = steady_clock::now();
 
 		// this is the number of seconds since the queue was constructed. This is
 		// compared against the expiration times on the queue entries
@@ -77,12 +81,15 @@ struct ping_queue
 		return true;
 	}
 
-	void insert_node(Address const& addr, std::uint16_t const port, int const sock_idx)
+	// returns whether the node was inserted or not
+	bool insert_node(Address const& addr, std::uint16_t const port, int const sock_idx
+		, time_point const now)
 	{
 		assert(addr != Address::any());
+		assert(now >= m_created);
 
 		// prevent duplicate entries
-		if (m_ips.count(addr)) return;
+		if (m_ips.count(addr)) return false;
 
 		// the number of nodes we allow in the queue before we start dropping
 		// nodes (to stay below the limi)
@@ -96,21 +103,22 @@ struct ping_queue
 			// once we do, we increase the drop rate the closer we get to the limit
 			++m_round_robin;
 			if (m_round_robin < (m_queue.size() - low_watermark) * 256 / (m_capacity - low_watermark))
-				return;
+				return false;
 		}
 
 		// we primarily want to keep quality nodes in our list.
-		// in 10 minutes, any pin-hole the node may have had open to
+		// in 15 minutes, any pin-hole the node may have had open to
 		// us is likely to have been closed. If the node responds
 		// in 15 minutes from now, it's likely to either have a full-cone
 		// NAT or not be NATed at all (which is the way we like our nodes).
 		// also, it still being up is a good predictor for it staying up
 		// longer as well.
 		std::uint32_t const expire = duration_cast<seconds>(
-			steady_clock::now() + minutes(15) - m_created).count();
+			now + minutes(15) - m_created).count();
 
 		m_queue.push_back({addr.to_bytes(), expire, std::uint16_t(sock_idx), port});
 		m_ips.insert(addr);
+		return true;
 	}
 
 private:
@@ -143,7 +151,7 @@ private:
 	// the total number of queue entries we're allowed to keep
 	size_t const m_capacity;
 
-	steady_clock::time_point const m_created = steady_clock::now();
+	time_point const m_created;
 
 	// this is a wrapping counter used to determine the probability of dropping
 	// this node when the queue is under pressure. It's deliberately meant to
