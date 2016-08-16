@@ -28,6 +28,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <array>
 #include <algorithm>
+#include <chrono>
 #include "ip_set.hpp"
 #include "mapped_file.hpp" // for mapped_vector
 

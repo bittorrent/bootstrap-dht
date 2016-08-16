@@ -491,8 +491,8 @@ std::string storage_filename(char const* base_path, int const threadid, bool con
 struct router_thread
 {
 	router_thread(char const* storage_dir, int const tid, std::vector<address> addrs)
-		: ping_queue4(ping_queue_size)
-		, ping_queue6(ping_queue_size)
+		: ping_queue4(ping_queue_size, steady_clock::now())
+		, ping_queue6(ping_queue_size, steady_clock::now())
 		, node_buffer4(storage_filename(storage_dir, tid, false).c_str(), node_buffer_size)
 		, node_buffer6(storage_filename(storage_dir, tid, true).c_str(), node_buffer_size)
 		, signals(ios)
@@ -593,12 +593,14 @@ struct router_thread
 			nodebuf_size[threadid] = node_buffer.size();
 #endif
 
+			time_point const now = steady_clock::now();
+
 			// if we need to ping nodes, do that now
 			queued_node_t n;
-			while (ping_queue4.need_ping(&n))
+			while (ping_queue4.need_ping(&n, now))
 				send_ping(n);
 
-			while (ping_queue6.need_ping(&n))
+			while (ping_queue6.need_ping(&n, now))
 				send_ping(n);
 
 			error_code ec;
@@ -880,6 +882,8 @@ struct router_thread
 			bdecode_node ro = e.dict_find_int("ro");
 			if (ro && ro.int_value() != 0) return;
 
+			time_point const now = steady_clock::now();
+
 			// don't add the same IP multiple times in a row
 			if (is_v4 &&
 				(last_nodes4.empty() || last_nodes4.back().ip != ep.address().to_v4().to_bytes()))
@@ -891,7 +895,8 @@ struct router_thread
 				last_nodes4.push_back(e);
 
 				// ping this node later, we may want to add it to our node buffer
-				ping_queue4.insert_node(ep.address().to_v4(), ep.port(), &sock - &socks[0]);
+				ping_queue4.insert_node(ep.address().to_v4(), ep.port()
+					, &sock - &socks[0], now);
 			}
 			else if (!is_v4 &&
 				(last_nodes6.empty() || last_nodes6.back().ip != ep.address().to_v6().to_bytes()))
@@ -903,7 +908,8 @@ struct router_thread
 				last_nodes6.push_back(e);
 
 				// ping this node later, we may want to add it to our node buffer
-				ping_queue6.insert_node(ep.address().to_v6(), ep.port(), &sock - &socks[0]);
+				ping_queue6.insert_node(ep.address().to_v6(), ep.port()
+					, &sock - &socks[0], now);
 			}
 		}
 	}
