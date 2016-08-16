@@ -36,6 +36,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <cstring> // for memset
 #include <cstdio> // for snprintf
 #include <cinttypes> // for PRId64 et.al.
+#include <cstddef> // for ptrdiff_t
 
 #include <alloca.h>
 
@@ -835,7 +836,7 @@ namespace libtorrent
 						TORRENT_FAIL_BDECODE(e);
 
 					// remaining buffer size excluding ':'
-					ptrdiff_t const buff_size = end - start - 1;
+					std::ptrdiff_t const buff_size = end - start - 1;
 					if (len > buff_size)
 						TORRENT_FAIL_BDECODE(bdecode_errors::unexpected_eof);
 					if (len < 0)
