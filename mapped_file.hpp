@@ -31,6 +31,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <unistd.h> // for open/close
 #include <cstring> // for memcpy
 
+#include <sys/mman.h> // for madvise
+
 struct file
 {
 	file(char const* name)
