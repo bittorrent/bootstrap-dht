@@ -85,6 +85,7 @@ const int nodes_in_response = 16;
 int node_buffer_size = 10000000;
 int ping_queue_size = 5000000;
 bool verify_node_id = true;
+int port = 6881;
 
 #ifdef CLIENTS_STAT
 std::mutex client_mutex;
@@ -502,7 +503,7 @@ struct router_thread
 	{
 		for (address a : addrs)
 		{
-			socks.emplace_back(ios, udp::endpoint(a, 6881));
+			socks.emplace_back(ios, udp::endpoint(a, port));
 		}
 
 		if (socks.empty())
@@ -962,6 +963,8 @@ void print_usage()
 		"                      followed by a dash and an integer.\n"
 		"--dir <path>          specify the directory where the node buckets are\n"
 		"                      stored on disk. Defaults to \".\".\n"
+		"--port <listen-port>  Sets the port to listen on (for all interfaces)\n"
+		"                      defaults to 6881\n"
 		"\n"
 		"\n"
 	);
@@ -1072,6 +1075,16 @@ int main(int argc, char* argv[])
 				return 1;
 			}
 			storage_dir = argv[i];
+		}
+		else if (argv[i] == "--port"_s)
+		{
+			++i;
+			if (i >= argc)
+			{
+				fprintf(stderr, "--port expects a port number argument\n");
+				return 1;
+			}
+			port = atoi(argv[i]);
 		}
 		else if (argv[i] == "--no-verify-id"_s)
 		{
