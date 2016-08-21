@@ -112,8 +112,19 @@ struct mapped_vector
 	void resize(size_t const s)
 	{
 		if (s == m_size) return;
-		if (s < m_size) m_size = s;
-		assert(false && "support default constructing new items");
+		if (s < m_size) {
+			for (; m_size > s; --m_size) {
+				m_array[m_size-1].~T();
+			}
+		}
+		else if (s > capacity()) {
+			throw std::range_error("mapped_vector::resize() exceed capacity");
+		}
+		else {
+			for (; m_size < s; ++m_size) {
+				new (&m_array[m_size]) T();
+			}
+		}
 	}
 	bool empty() const { return m_size == 0; }
 
