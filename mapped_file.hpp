@@ -31,6 +31,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <unistd.h> // for open/close
 #include <cstring> // for memcpy
 
+#include <sys/mman.h> // for madvise
+
 struct file
 {
 	file(char const* name)
@@ -66,6 +68,12 @@ struct mapped_file
 		if (m_buf == MAP_FAILED) {
 			throw std::system_error(std::error_code(errno, std::generic_category()));
 		}
+
+#if defined MADV_DONTDUMP
+		madvise(m_buf, m_size, MADV_DONTDUMP);
+#elif defined MADV_NOCORE
+		madvise(m_buf, m_size, MADV_NOCORE);
+#endif
 	}
 	mapped_file(mapped_file const&) = delete;
 	mapped_file& operator=(mapped_file const&) = delete;
