@@ -31,6 +31,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <chrono>
 #include "ip_set.hpp"
 #include "mapped_file.hpp" // for mapped_vector
+#include "span.hpp"
 
 template <typename Address>
 struct node_buffer
@@ -75,41 +76,43 @@ struct node_buffer
 
 	int size() const { return m_current_max_size; }
 
-	// TODO: try to avoid heap allocations here
-	std::string get_nodes(int const num_nodes)
+	// returns two spans containing the peer IP, port and node IDs. The second
+	// span may be empty.
+	std::array<span<char const>, 2>
+	get_nodes(int const num_nodes)
 	{
-		std::string ret;
-
 		if (m_buffer.size() < num_nodes)
 		{
-			ret.resize(m_buffer.size() * sizeof(node_entry_t));
-			if (ret.size() > 0)
-				memcpy(&ret[0], &m_buffer[0], m_buffer.size() * sizeof(node_entry_t));
-
+			// this is the case where we have fewer nodes in the node_buffer than
+			// we want to send in a single response
 			m_read_cursor = 0;
-			return ret;
+			return {{
+				{reinterpret_cast<char const*>(m_buffer.data()), m_buffer.size() * sizeof(node_entry_t)}
+				, {}}};
 		}
-
-		ret.resize(num_nodes * sizeof(node_entry_t));
 
 		if (m_read_cursor == m_buffer.size())
 			m_read_cursor = 0;
 
 		if (m_read_cursor <= m_buffer.size() - num_nodes)
 		{
-			memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_t) * num_nodes);
+			// this is the common case, where we have sufficient nodes ahead of the
+			// read cursor to just return a single range
+			std::array<span<char const>, 2> const ret{{
+				{reinterpret_cast<char const*>(&m_buffer[m_read_cursor]), num_nodes * sizeof(node_entry_t)}
+				, {}}};
 			m_read_cursor += num_nodes;
 			return ret;
 		}
 
 		size_t const slice1 = m_buffer.size() - m_read_cursor;
 		assert(slice1 < num_nodes);
-		memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_t) * slice1);
-		m_read_cursor += slice1;
-
 		size_t const slice2 = num_nodes - slice1;
-		memcpy(&ret[slice1 * sizeof(node_entry_t)], &m_buffer[0]
-			, sizeof(node_entry_t) * slice2);
+
+		std::array<span<char const>, 2> const ret{{
+			{reinterpret_cast<char const*>(&m_buffer[m_read_cursor]), slice1 * sizeof(node_entry_t)}
+			, {reinterpret_cast<char const*>(&m_buffer[0]), slice2 * sizeof(node_entry_t)}
+		}};
 		m_read_cursor = slice2;
 		return ret;
 	}

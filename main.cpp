@@ -648,29 +648,28 @@ struct router_thread
 	}
 
 	template <typename Address>
-	std::string get_nodes(node_buffer<Address>& buffer
-		, boost::circular_buffer<typename node_buffer<Address>::node_entry_t>& last_nodes)
+	std::array<span<char const>, 3> get_nodes(node_buffer<Address>& buffer
+		, boost::circular_buffer<typename node_buffer<Address>::node_entry_t> const& last_nodes)
 	{
 		size_t const entry_size = sizeof(typename node_buffer<Address>::node_entry_t);
-		std::string nodes = buffer.get_nodes(nodes_in_response);
+		auto const ranges = buffer.get_nodes(nodes_in_response);
 
-		int const num_nodes = nodes.size() / entry_size;
-		if (num_nodes < nodes_in_response && last_nodes.size() > 0)
+		size_t len = 0;
+		for (auto const& r : ranges) len += r.size();
+
+		int const num_nodes = len / entry_size;
+		if (num_nodes >= nodes_in_response || last_nodes.empty())
 		{
-			// fill in with lower quality nodes, since
-			nodes.resize((num_nodes + last_nodes.size()) * entry_size);
 
-			// this is just to be able to copy the entire ringbuffer in
-			// a single call. find the physical start of its buffer
-			void* ptr;
-			ptr = (std::min)(last_nodes.array_one().first
-				, last_nodes.array_two().first);
-			memcpy(&nodes[num_nodes * entry_size]
-				, ptr, last_nodes.size() * entry_size);
-			++backup_nodes_returned;
+			return {{ranges[0], ranges[1], {}}};
 		}
 
-		return nodes;
+		// this is just to be able to copy the entire ringbuffer in
+		// a single call. find the physical start of its buffer
+		char const* ptr = reinterpret_cast<char const*>((std::min)(last_nodes.array_one().first
+			, last_nodes.array_two().first));
+		++backup_nodes_returned;
+		return {{ranges[0], ranges[1], {ptr, last_nodes.size() * entry_size}}};
 	}
 
 	void process_incoming_packet(bound_socket& sock, size_t const len)
@@ -843,13 +842,15 @@ struct router_thread
 				if (want_v4)
 				{
 					b.add_string("nodes");
-					b.add_string(get_nodes(node_buffer4, last_nodes4));
+					auto const node_ranges = get_nodes(node_buffer4, last_nodes4);
+					b.add_string_concatenate(node_ranges);
 				}
 
 				if (want_v6)
 				{
 					b.add_string("nodes6");
-					b.add_string(get_nodes(node_buffer6, last_nodes6));
+					auto const node_ranges = get_nodes(node_buffer6, last_nodes6);
+					b.add_string_concatenate(node_ranges);
 				}
 			}
 			b.close_dict();
