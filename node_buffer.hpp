@@ -81,7 +81,7 @@ struct node_buffer
 	std::array<span<char const>, 2>
 	get_nodes(int const num_nodes)
 	{
-		if (m_buffer.size() < num_nodes)
+		if (m_buffer.size() <= num_nodes)
 		{
 			// this is the case where we have fewer nodes in the node_buffer than
 			// we want to send in a single response
