@@ -43,19 +43,30 @@ TEST_CASE("node_buffer initial state")
 	unlink("test-node-buffer-1");
 }
 
+template <size_t N>
+bool compare(std::array<span<char const>, N> const& ranges, std::string cmp)
+{
+	for (auto const& r : ranges) {
+		if (cmp.substr(0, r.size()) != std::string(r.data(), r.size()))
+			return false;
+		cmp = cmp.substr(r.size());
+	}
+	return cmp.empty();
+}
+
 TEST_CASE("node_buffer single")
 {
 	unlink("test-node-buffer-2");
 	node_buffer<address_v4> buf("test-node-buffer-2", 10);
 
-	CHECK(buf.get_nodes(1) == std::string());
+	CHECK(compare(buf.get_nodes(1), ""));
 
 	buf.insert_node(v4::from_string("10.1.1.1"), 6881, node_id);
 
-	CHECK(buf.get_nodes(10) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1");
+	CHECK(compare(buf.get_nodes(10), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1"));
 
 	// since there's only one entry, we should get it back every time we ask
-	CHECK(buf.get_nodes(10) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1");
+	CHECK(compare(buf.get_nodes(10), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1"));
 
 	unlink("test-node-buffer-2");
 }
@@ -71,10 +82,10 @@ TEST_CASE("node_buffer duplicate")
 	buf.insert_node(v4::from_string("10.1.1.2"), 6881, node_id);
 
 	// asking for nodes should give 10.1.1.2 as many times as 10.1.1.1
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1");
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1"));
 
 	unlink("test-node-buffer-3");
 }
@@ -92,19 +103,19 @@ TEST_CASE("node_buffer wrap")
 	}
 
 	// asking for nodes, we should only see the last 10 nodes added
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0a\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0b\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0c\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0d\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0e\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0f\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x10\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x11\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x12\x1a\xe1");
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x13\x1a\xe1");
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0a\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0b\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0c\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0d\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0e\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0f\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x10\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x11\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x12\x1a\xe1"));
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x13\x1a\xe1"));
 
 	// and then start over again
-	CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0a\x1a\xe1");
+	CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0a\x1a\xe1"));
 
 	unlink("test-node-buffer-4");
 }
@@ -120,31 +131,31 @@ TEST_CASE("node_buffer restore")
 			buf.insert_node(v4::from_string(ip.c_str()), 6881, node_id);
 		}
 
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x03\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x04\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x05\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x06\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x07\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x08\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x09\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0a\x1a\xe1");
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x03\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x04\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x05\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x06\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x07\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x08\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x09\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0a\x1a\xe1"));
 	}
 
 	{
 		node_buffer<address_v4> buf("test-node-buffer-5", 10);
 
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x03\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x04\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x05\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x06\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x07\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x08\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x09\x1a\xe1");
-		CHECK(buf.get_nodes(1) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0a\x1a\xe1");
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x03\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x04\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x05\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x06\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x07\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x08\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x09\x1a\xe1"));
+		CHECK(compare(buf.get_nodes(1), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0a\x1a\xe1"));
 
 		// also make sure the IP unordered set used to prevent duplicates was
 		// restored
@@ -169,7 +180,7 @@ TEST_CASE("node_buffer multi-request")
 			buf.insert_node(v4::from_string(ip.c_str()), 6881, node_id);
 		}
 
-		CHECK(buf.get_nodes(10) == "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1"
+		CHECK(compare(buf.get_nodes(10), "aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x03\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x04\x1a\xe1"
@@ -178,7 +189,7 @@ TEST_CASE("node_buffer multi-request")
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x07\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x08\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x09\x1a\xe1"
-			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0a\x1a\xe1");
+			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x0a\x1a\xe1"));
 	}
 
 	unlink("test-node-buffer-6");
@@ -200,7 +211,7 @@ TEST_CASE("node_buffer wrapping-request")
 			buf.get_nodes(1);
 		}
 
-		CHECK(buf.get_nodes(10) ==
+		CHECK(compare(buf.get_nodes(10),
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x06\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x07\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x08\x1a\xe1"
@@ -210,7 +221,7 @@ TEST_CASE("node_buffer wrapping-request")
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x03\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x04\x1a\xe1"
-			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x05\x1a\xe1");
+			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x05\x1a\xe1"));
 	}
 
 	unlink("test-node-buffer-7");

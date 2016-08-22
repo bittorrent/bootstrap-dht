@@ -27,6 +27,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <cstring>
 #include <string>
 #include <algorithm>
+#include <array>
+
+#include "span.hpp"
 
 struct bencoder
 {
@@ -45,6 +48,23 @@ struct bencoder
 	void add_string(std::string const& str)
 	{
 		add_string(str.c_str(), str.length());
+	}
+
+	template <size_t N>
+	void add_string_concatenate(std::array<span<char const>, N> const& ranges)
+	{
+		size_t len = 0;
+		for (auto const& r : ranges) len += r.size();
+
+		m_buf += std::snprintf(m_buf, m_end - m_buf, "%zu:", len);
+
+		if (m_end - m_buf < len) return;
+
+		for (auto const& r : ranges) {
+			if (r.empty()) continue;
+			memcpy(m_buf, r.data(), r.size());
+			m_buf += r.size();
+		}
 	}
 	char* end() const { return m_buf; }
 
