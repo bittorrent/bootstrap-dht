@@ -102,12 +102,12 @@ struct node_buffer
 			return ret;
 		}
 
-		int const slice1 = m_buffer.size() - m_read_cursor;
+		size_t const slice1 = m_buffer.size() - m_read_cursor;
 		assert(slice1 < num_nodes);
 		memcpy(&ret[0], &m_buffer[m_read_cursor], sizeof(node_entry_t) * slice1);
 		m_read_cursor += slice1;
 
-		int const slice2 = num_nodes - slice1;
+		size_t const slice2 = num_nodes - slice1;
 		memcpy(&ret[slice1 * sizeof(node_entry_t)], &m_buffer[0]
 			, sizeof(node_entry_t) * slice2);
 		m_read_cursor = slice2;
@@ -173,8 +173,8 @@ struct node_buffer
 
 private:
 
-	int m_read_cursor = 0;
-	int m_write_cursor = 0;
+	size_t m_read_cursor = 0;
+	size_t m_write_cursor = 0;
 
 	// the current max size we use for the node buffer. If it's churning too
 	// frequently, we grow it
