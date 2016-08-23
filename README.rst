@@ -27,7 +27,13 @@ The command line options are::
 	                      node list to hand out).
 	--ipv6 <ip>           listen for IPv6 packets on the given address
 	                      can be specified more than once
-
+	--version <version>   The client version to insert into all outgoing
+	                      packets. The version format must be 2 characters
+	                      followed by a dash and an integer.
+	--dir <path>          specify the directory where the node buckets are
+	                      stored on disk. Defaults to ".".
+	--port <listen-port>  Sets the port to listen on (for all interfaces)
+	                      defaults to 6881
 
 The first argument when launching the server is its own IP. This is not
 only relevant for binding the socket to this interface but is also used when
@@ -62,8 +68,8 @@ are pinged.
 
 .. _this: http://libtorrent.org/dht_sec.html
 
-``dht-bootstrap`` listens on port 6881 by default. If the port is busy, it will
-quit with an error message and error code.
+``dht-bootstrap`` listens on port 6881 by default. You may specify a different
+port using the ``--port`` command line option.
 
 A more detailed description of how it's implemented can be found in the
 header of ``main.cpp``.
@@ -74,18 +80,19 @@ Please contribute back fixes and improvements!
 building
 --------
 
-To build, you need boost_ and unpacket to a path specified by ``$BOOST_ROOT``
-and *boost-build*. Build by running: ``b2``.
+To build, you need boost_ and boost-build installed. Build by running: ``b2``.
 
 .. _boost: http://www.boost.org
 
-If you prefer to build manually, just compile ``main.cpp`` and link against
-the boost.system library as well as adding boost to your include path.
+If you prefer to build manually, just compile ``main.cpp``, ``bdecode.cpp`` and
+link against the boost.system library as well as adding boost to your include
+path.
 
-To build you need a C++ 11 enabled compiler.
+To build you need a compiler with C++11 support.
 
 acknowledgments
 ---------------
+
 Thanks to following people who have contributed code or discovered
 bugs in bootstrap-dht:
 
