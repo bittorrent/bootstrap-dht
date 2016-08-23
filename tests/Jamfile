@@ -7,7 +7,7 @@ lib boost-system : : <name>boost_system ;
 project
 	: requirements
 	<library>boost-system
-	<include>..
+	<include>../src
 	: default-build
 ;
 
