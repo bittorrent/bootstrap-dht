@@ -211,7 +211,7 @@ TEST_CASE("node_buffer wrapping-request")
 			buf.get_nodes(1);
 		}
 
-		CHECK(compare(buf.get_nodes(10),
+		CHECK(compare(buf.get_nodes(9),
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x06\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x07\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x08\x1a\xe1"
@@ -220,8 +220,7 @@ TEST_CASE("node_buffer wrapping-request")
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x01\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x02\x1a\xe1"
 			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x03\x1a\xe1"
-			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x04\x1a\xe1"
-			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x05\x1a\xe1"));
+			"aaaaaaaaaaaaaaaaaaaa\x0a\x01\x01\x04\x1a\xe1"));
 	}
 
 	unlink("test-node-buffer-7");
