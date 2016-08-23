@@ -4,10 +4,11 @@ lib boost-system : : <name>boost_system ;
 exe dht-bootstrap
 
 	: # sources
-	main.cpp bdecode.cpp
+	src/main.cpp src/bdecode.cpp
 
 	: # requirements
 	<threading>multi
+	<include>src
 	<library>boost-system
 	<toolset>gcc:<cxxflags>-std=c++11
 	<toolset>darwin:<cxxflags>-std=c++11
@@ -20,10 +21,11 @@ exe dht-bootstrap
 exe dht-torture
 
 	: # sources
-	dht-torture.cpp bdecode.cpp
+	src/dht-torture.cpp src/bdecode.cpp
 
 	: # requirements
 	<threading>multi
+	<include>src
 	<library>boost-system
 	<toolset>gcc:<cxxflags>-std=c++11
 	<toolset>darwin:<cxxflags>-std=c++11
