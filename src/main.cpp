@@ -165,13 +165,13 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 	static std::uint32_t cnt = 0;
 	if (cnt == 0)
 	{
-		printf("%8s%10s%10s%10s%10s%10s%10s%10s%10s%10s\n"
-			, "time", "in", "inv-enc", "inv-src", "id-fail"
+		printf("%9s%10s%10s%10s%10s%10s%10s%10s%10s%10s\n"
+			, "time(ms)", "in", "inv-enc", "inv-src", "id-fail"
 			, "out-ping", "short-tid", "inv-pong", "added", "backup");
 	}
 	cnt = (cnt + 1) % 20;
 
-	printf("%8" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u"
+	printf("%9" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u"
 #ifdef DEBUG_STATS
 		"node-buf: [%s %s %s %s]"
 #endif
