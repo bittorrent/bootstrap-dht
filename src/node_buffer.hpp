@@ -133,7 +133,7 @@ struct node_buffer
 		// only allow one entry per IP
 		if (m_ips.count(address_type(e.ip))) return false;
 
-		auto now = steady_clock::now();
+		auto const now = steady_clock::now();
 		if (m_write_cursor == m_current_max_size
 			&& m_last_write_loop + minutes(15) > now)
 		{
@@ -151,7 +151,7 @@ struct node_buffer
 		{
 #ifdef DEBUG_STATS
 			printf("write cursor wrapping. %d minutes\n"
-				, duration_cast<minutes>(now - m_last_write_loop).count());
+				, int(std::chrono::duration_cast<minutes>(now - m_last_write_loop).count()));
 #endif
 			m_write_cursor = 0;
 			m_last_write_loop = now;

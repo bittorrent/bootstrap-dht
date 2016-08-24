@@ -133,7 +133,7 @@ std::atomic<uint64_t> added_nodes;
 std::atomic<uint64_t> backup_nodes_returned;
 
 #ifdef DEBUG_STATS
-std::atomic<uint32_t> nodebuf_size[4];
+std::array<std::atomic<uint32_t>, 4> nodebuf_size;
 #endif
 
 time_point stats_start = steady_clock::now();
@@ -593,7 +593,8 @@ struct router_thread
 		for (;;)
 		{
 #ifdef DEBUG_STATS
-			nodebuf_size[threadid] = node_buffer.size();
+			if (threadid < nodebuf_size.size())
+				nodebuf_size[threadid] = node_buffer4.size();
 #endif
 
 			time_point const now = steady_clock::now();

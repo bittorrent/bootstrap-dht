@@ -24,6 +24,8 @@ install:
 
 script:
   - bjam -j2
+  - bjam -j2 client_stats=on
+  - bjam -j2 debug_stats=on
   - cd tests
   - bjam -j2
 

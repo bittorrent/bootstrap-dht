@@ -1,5 +1,13 @@
+import feature : feature ;
+
 lib boost-system : : <target-os>darwin <name>boost_system-mt <search>/opt/local/lib : : <include>/opt/local/include ;
 lib boost-system : : <name>boost_system ;
+
+feature client_stats : off on : composite propagated ;
+feature.compose <client_stats>on : <define>CLIENTS_STAT=1 ;
+
+feature debug_stats : off on : composite propagated ;
+feature.compose <debug_stats>on : <define>DEBUG_STATS=1 ;
 
 exe dht-bootstrap
 
