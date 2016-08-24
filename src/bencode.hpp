@@ -37,17 +37,21 @@ struct bencoder
 
 	void open_dict() { if (m_buf < m_end) *m_buf++ = 'd'; }
 	void close_dict() { if (m_buf < m_end) *m_buf++ = 'e'; }
-	void add_string(char const* str, int len = -1)
+	void add_string(char const* str, size_t len)
 	{
-		if (len == -1) len = std::strlen(str);
-		m_buf += std::snprintf(m_buf, m_end - m_buf, "%d:", len);
-		len = (std::min)(len, int(m_end - m_buf));
+		m_buf += std::snprintf(m_buf, m_end - m_buf, "%zu:", len);
+		len = (std::min)(len, size_t(m_end - m_buf));
 		memcpy(m_buf, str, len);
 		m_buf += len;
 	}
-	void add_string(std::string const& str)
+	void add_string(char const* str)
 	{
-		add_string(str.c_str(), str.length());
+		size_t len = std::strlen(str);
+		add_string(str, len);
+	}
+	void add_string(span<char> str)
+	{
+		add_string(str.data(), str.size());
 	}
 
 	template <size_t N>

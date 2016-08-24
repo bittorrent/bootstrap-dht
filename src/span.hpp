@@ -25,6 +25,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #pragma once
 
 #include <string>
+#include <array>
 
 // TODO: at some point it probably makes sense to pull in GSL's span instead
 template <typename T>
@@ -35,7 +36,9 @@ struct span
 
 	span() : m_begin(nullptr), m_end(nullptr) {}
 	span(T* begin, size_t s) : m_begin(begin), m_end(m_begin + s) {}
-	span(std::basic_string<T>& str) : m_begin(str.data()), m_end(str.data() + str.size()) {}
+	span(std::basic_string<T>& str) : m_begin(&str[0]), m_end(&str[0] + str.size()) {}
+	template<size_t N>
+	span(std::array<T, N>& arr) : m_begin(arr.data()), m_end(arr.data() + arr.size()) {}
 	template<size_t N>
 	span(T (&arr)[N]) : m_begin(arr), m_end(arr + N) {}
 
@@ -52,4 +55,16 @@ private:
 	T* m_begin;
 	T* m_end;
 };
+
+template <typename T, size_t N>
+bool operator==(std::array<T, N> const& lhs, span<T> const& rhs)
+{
+	return lhs.size() == rhs.size() && std::equal(lhs.begin(), lhs.end(), rhs.begin());
+}
+
+template <typename T, size_t N>
+bool operator==(span<T> lhs, std::array<T, N> const& rhs)
+{
+	return lhs.size() == rhs.size() && std::equal(lhs.begin(), lhs.end(), rhs.begin());
+}
 

@@ -368,24 +368,23 @@ using node_entry_v6 = typename node_buffer<address_v6>::node_entry_t;
 using node_buffer_v4 = node_buffer<address_v4>;
 using node_buffer_v6 = node_buffer<address_v6>;
 
-// TODO: avoid heap allocation here
-std::string compute_tid(uint8_t const* secret, char const* remote_ip, size_t ip_len)
+std::array<char, 4> compute_tid(uint8_t const* secret, char const* remote_ip
+	, size_t const ip_len)
 {
 	sha1 ctx;
 	ctx.process_bytes(secret, 20);
 	ctx.process_bytes(remote_ip, ip_len);
-	uint32_t d[5];
+	std::uint32_t d[5];
 	ctx.get_digest(d);
-	std::string ret;
-	ret.resize(4);
-	ret[0] = (d[0] >> 24) & 0xff;
-	ret[1] = (d[0] >> 16) & 0xff;
-	ret[2] = (d[0] >> 8) & 0xff;
-	ret[3] = d[0] & 0xff;
-	return ret;
+	return {{
+		char((d[0] >> 24) & 0xff),
+		char((d[0] >> 16) & 0xff),
+		char((d[0] >> 8) & 0xff),
+		char(d[0] & 0xff)
+	}};
 }
 
-bool verify_tid(std::string tid, uint8_t const* secret1, uint8_t const* secret2
+bool verify_tid(span<char> tid, uint8_t const* secret1, uint8_t const* secret2
 	, char const* remote_ip, size_t ip_len)
 {
 	// we use 6 byte transaction IDs
@@ -537,7 +536,7 @@ struct router_thread
 		//fprintf(stderr, "pinging node\n");
 		char remote_ip[18];
 		size_t remote_ip_len = build_ip_field(n.ep, remote_ip);
-		std::string const transaction_id = compute_tid(secret1, remote_ip, remote_ip_len);
+		std::array<char, 4> transaction_id = compute_tid(secret1, remote_ip, remote_ip_len);
 		bound_socket& sock = socks[n.sock_idx];
 
 		// send the ping to this node
