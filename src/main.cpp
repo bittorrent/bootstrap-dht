@@ -122,15 +122,15 @@ std::unordered_map<uint16_t, int> client_histogram;
 
 */
 
-std::atomic<uint64_t> incoming_queries;
-std::atomic<uint64_t> invalid_encoding;
-std::atomic<uint64_t> invalid_src_address;
-std::atomic<uint64_t> failed_nodeid_queries;
-std::atomic<uint64_t> outgoing_pings;
-std::atomic<uint64_t> short_tid_pongs;
-std::atomic<uint64_t> invalid_pongs;
-std::atomic<uint64_t> added_nodes;
-std::atomic<uint64_t> backup_nodes_returned;
+std::atomic<uint32_t> incoming_queries;
+std::atomic<uint32_t> invalid_encoding;
+std::atomic<uint32_t> invalid_src_address;
+std::atomic<uint32_t> failed_nodeid_queries;
+std::atomic<uint32_t> outgoing_pings;
+std::atomic<uint32_t> short_tid_pongs;
+std::atomic<uint32_t> invalid_pongs;
+std::atomic<uint32_t> added_nodes;
+std::atomic<uint32_t> backup_nodes_returned;
 
 #ifdef DEBUG_STATS
 std::atomic<uint32_t> nodebuf_size[4];
@@ -159,41 +159,42 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 {
 	if (ec) return;
 
-	time_point now = steady_clock::now();
-	float interval = duration_cast<milliseconds>(now - stats_start).count() / 1000.f;
-	if (interval <= 0.f) interval = 0.001f;
-	stats_start = now;
+	time_point const now = steady_clock::now();
 
 	printf(
 #ifdef DEBUG_STATS
 		"node-buf: [%s %s %s %s]"
 #endif
 
-		" in: %.1f"
-		" invalid_enc: %.1f"
-		" invalid_src: %.1f"
-		" id_failure: %.1f"
-		" out_ping: %.1f"
-		" short_tid_pong: %.1f"
-		" invalid_pong: %.1f"
-		" added: %.1f"
-		" backup: %.1f\n"
+		" t: %-8" PRId64 "ms"
+		" in: %-8u"
+		" invalid_enc: %-8u"
+		" invalid_src: %-8u"
+		" id_failure: %-8u"
+		" out_ping: %-8u"
+		" short_tid_pong: %-8u"
+		" invalid_pong: %-8u"
+		" added: %-8u"
+		" backup: %-8u\n"
 #ifdef DEBUG_STATS
 		, suffix(nodebuf_size[0].load()).c_str()
 		, suffix(nodebuf_size[1].load()).c_str()
 		, suffix(nodebuf_size[2].load()).c_str()
 		, suffix(nodebuf_size[3].load()).c_str()
 #endif
-		, incoming_queries.exchange(0) / interval
-		, invalid_encoding.exchange(0) / interval
-		, invalid_src_address.exchange(0) / interval
-		, failed_nodeid_queries.exchange(0) / interval
-		, outgoing_pings.exchange(0) / interval
-		, short_tid_pongs.exchange(0) / interval
-		, invalid_pongs.exchange(0) / interval
-		, added_nodes.exchange(0) / interval
-		, backup_nodes_returned.exchange(0) / interval
+		, duration_cast<milliseconds>(now - stats_start).count()
+		, incoming_queries.exchange(0)
+		, invalid_encoding.exchange(0)
+		, invalid_src_address.exchange(0)
+		, failed_nodeid_queries.exchange(0)
+		, outgoing_pings.exchange(0)
+		, short_tid_pongs.exchange(0)
+		, invalid_pongs.exchange(0)
+		, added_nodes.exchange(0)
+		, backup_nodes_returned.exchange(0)
 		);
+
+	stats_start = now;
 
 #ifdef CLIENTS_STAT
 	std::lock_guard<std::mutex> l(client_mutex);
