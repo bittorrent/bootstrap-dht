@@ -2,6 +2,7 @@
 The MIT License (MIT)
 
 Copyright (c) 2013-2014 BitTorrent Inc.
+Copyright (c) 2016 Arvid Norberg
 
 author: Arvid Norberg, Steven Siloti
 
@@ -86,6 +87,8 @@ int nodes_in_response = 16;
 int node_buffer_size = 10000000;
 int ping_queue_size = 5000000;
 bool verify_node_id = true;
+bool cross_pollinate = false;
+udp::endpoint bootstrap_node;
 int port = 6881;
 
 #ifdef CLIENTS_STAT
@@ -535,7 +538,6 @@ struct router_thread
 
 	void send_ping(queued_node_t const& n)
 	{
-		//fprintf(stderr, "pinging node\n");
 		char remote_ip[18];
 		size_t remote_ip_len = build_ip_field(n.ep, remote_ip);
 		std::array<char, 4> transaction_id = compute_tid(secret1, remote_ip, remote_ip_len);
@@ -581,6 +583,51 @@ struct router_thread
 		}
 	}
 
+	void send_request(queued_node_t const& n)
+	{
+		char remote_ip[18];
+		size_t remote_ip_len = build_ip_field(n.ep, remote_ip);
+		std::string const transaction_id = compute_tid(secret1, remote_ip, remote_ip_len);
+		bound_socket& sock = socks[n.sock_idx];
+
+		// send find_nodes to this node
+		bencoder b(response, sizeof(response));
+		b.open_dict();
+
+		// args dict
+		b.add_string("a");
+		b.open_dict();
+		b.add_string("id"); b.add_string(sock.node_id.data(), sock.node_id.size());
+		char random_target[20];
+		std::generate(random_target, random_target + 20, &std::rand);
+		b.add_string("target"); b.add_string(random_target, sizeof(random_target));
+		b.close_dict();
+
+		b.add_string("t"); b.add_string(transaction_id);
+		b.add_string("q"); b.add_string("find_node");
+
+		if (version[0] != 0)
+		{
+			b.add_string("v");
+			b.add_string(version.data(), 4);
+		}
+
+		b.add_string("y"); b.add_string("q");
+
+		b.close_dict();
+
+		error_code ec;
+		int const len = sock.sock.send_to(buffer(response, b.end() - response), n.ep, 0, ec);
+		if (ec) {
+			fprintf(stderr, "FIND_NODE send_to failed: (%d) %s (%s:%d)\n"
+				, ec.value(), ec.message().c_str()
+				, n.ep.address().to_string(ec).c_str(), n.ep.port());
+		}
+		else if (len <= 0) {
+			fprintf(stderr, "FIND_NODE send_to failed: return=%d\n", len);
+		}
+	}
+
 	void start()
 	{
 		printf("starting thread %d\n", threadid);
@@ -591,6 +638,7 @@ struct router_thread
 				, std::bind(&router_thread::packet_received, this, std::ref(sock), _1, _2));
 		}
 
+		time_point last_cross_pollinate = steady_clock::now();
 		for (;;)
 		{
 #ifdef DEBUG_STATS
@@ -599,6 +647,14 @@ struct router_thread
 #endif
 
 			time_point const now = steady_clock::now();
+
+			if (cross_pollinate
+				&& now - last_cross_pollinate > minutes(10)
+				&& ping_queue4.size() + ping_queue6.size() < 16)
+			{
+				last_cross_pollinate = now;
+				send_request({bootstrap_node, 0});
+			}
 
 			// if we need to ping nodes, do that now
 			queued_node_t n;
@@ -761,8 +817,6 @@ struct router_thread
 			if (!is_valid_ip(ep))
 				return;
 
-			//			fprintf(stderr, "got ping response\n");
-
 			if (verify_node_id)
 			{
 				// verify that the node ID is valid for the source IP
@@ -780,6 +834,42 @@ struct router_thread
 					{
 						++failed_nodeid_queries;
 						return;
+					}
+				}
+			}
+
+			if (cross_pollinate
+				&& ep == bootstrap_node)
+			{
+				// this is a response from the other bootstrap node
+				// put the nodes in the response in the ping queue
+				{
+					std::string nodes4 = a.dict_find_string_value("nodes", "");
+					fprintf(stderr, "received %d nodes4 from x-pollinate node\n"
+						, int(nodes4.size() / 26));
+					char const* end = nodes4.data() + nodes4.size();
+					for (char const* i = nodes4.data(); i < end; i += 6 + 20)
+					{
+						address_v4::bytes_type b;
+						std::memcpy(b.data(), i, b.size());
+						int const port = (unsigned(i[4]) << 8) | unsigned(i[5]);
+						added_nodes += node_buffer4.insert_node(address_v4(b)
+							, port, i + 6);
+					}
+				}
+
+				{
+					std::string nodes6 = a.dict_find_string_value("nodes6", "");
+					fprintf(stderr, "received %d nodes6 from x-pollinate node\n"
+						, int(nodes6.size() / 38));
+					char const* end = nodes6.data() + nodes6.size();
+					for (char const* i = nodes6.data(); i < end; i += 18 + 20)
+					{
+						address_v6::bytes_type b;
+						std::memcpy(b.data(), i, b.size());
+						int const port = (unsigned(i[16]) << 8) | unsigned(i[17]);
+						added_nodes += node_buffer6.insert_node(address_v6(b)
+							, port, i + 18);
 					}
 				}
 			}
@@ -970,6 +1060,9 @@ void print_usage()
 		"                      defaults to 6881\n"
 		"--response-size <n>   Specifies the number of DHT nodes to return in\n"
 		"                      response to a query. Defaults to 16\n"
+		"--x-pollinate <ip> <port>\n"
+		"                      if the ping queue becomes too small, request more\n"
+		"                      nodes from this DHT node.\n"
 		"\n"
 		"\n"
 	);
@@ -1105,6 +1198,31 @@ int main(int argc, char* argv[])
 				fprintf(stderr, "invalid number of nodes: %d\n", nodes_in_response);
 				return 1;
 			}
+		}
+		else if (argv[i] == "--x-pollinate"_s)
+		{
+			++i;
+			if (i >= argc)
+			{
+				fprintf(stderr, "--x-pollinate expects an IP argument\n");
+				return 1;
+			}
+			error_code ec;
+			bootstrap_node.address(address::from_string(argv[i], ec));
+			if (ec)
+			{
+				fprintf(stderr, "invalid IP argument \"%s\": %s\n"
+					, argv[i], ec.message().c_str());
+				return 1;
+			}
+			++i;
+			if (i >= argc)
+			{
+				fprintf(stderr, "--x-pollinate expects a port argument\n");
+				return 1;
+			}
+			bootstrap_node.port(atoi(argv[i]));
+			cross_pollinate = true;
 		}
 		else if (argv[i] == "--no-verify-id"_s)
 		{

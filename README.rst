@@ -34,6 +34,9 @@ The command line options are::
 	                      stored on disk. Defaults to ".".
 	--port <listen-port>  Sets the port to listen on (for all interfaces)
 	                      defaults to 6881
+	--x-pollinate <ip> <port>
+	                      if the ping queue becomes too small, request more
+	                      nodes from this DHT node.
 
 The first argument when launching the server is its own IP. This is not
 only relevant for binding the socket to this interface but is also used when
