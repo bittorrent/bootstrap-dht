@@ -161,27 +161,21 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 
 	time_point const now = steady_clock::now();
 
-	printf(
+	// every 20th line is a repeat of the header
+	static std::uint32_t cnt = 0;
+	if (cnt == 0)
+	{
+		printf("%8s%10s%10s%10s%10s%10s%10s%10s%10s%10s\n"
+			, "time", "in", "inv-enc", "inv-src", "id-fail"
+			, "out-ping", "short-tid", "inv-pong", "added", "backup");
+	}
+	cnt = (cnt + 1) % 20;
+
+	printf("%8" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u"
 #ifdef DEBUG_STATS
 		"node-buf: [%s %s %s %s]"
 #endif
-
-		" t: %-8" PRId64 "ms"
-		" in: %-8u"
-		" invalid_enc: %-8u"
-		" invalid_src: %-8u"
-		" id_failure: %-8u"
-		" out_ping: %-8u"
-		" short_tid_pong: %-8u"
-		" invalid_pong: %-8u"
-		" added: %-8u"
-		" backup: %-8u\n"
-#ifdef DEBUG_STATS
-		, suffix(nodebuf_size[0].load()).c_str()
-		, suffix(nodebuf_size[1].load()).c_str()
-		, suffix(nodebuf_size[2].load()).c_str()
-		, suffix(nodebuf_size[3].load()).c_str()
-#endif
+		"\n"
 		, duration_cast<milliseconds>(now - stats_start).count()
 		, incoming_queries.exchange(0)
 		, invalid_encoding.exchange(0)
@@ -192,6 +186,12 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 		, invalid_pongs.exchange(0)
 		, added_nodes.exchange(0)
 		, backup_nodes_returned.exchange(0)
+#ifdef DEBUG_STATS
+		, suffix(nodebuf_size[0].load()).c_str()
+		, suffix(nodebuf_size[1].load()).c_str()
+		, suffix(nodebuf_size[2].load()).c_str()
+		, suffix(nodebuf_size[3].load()).c_str()
+#endif
 		);
 
 	stats_start = now;
