@@ -82,7 +82,7 @@ using node_id_type = std::array<char, 20>;
 
 const int print_stats_interval = 60;
 const int rotate_secrets_interval = 600;
-const int nodes_in_response = 16;
+int nodes_in_response = 16;
 int node_buffer_size = 10000000;
 int ping_queue_size = 5000000;
 bool verify_node_id = true;
@@ -968,6 +968,8 @@ void print_usage()
 		"                      stored on disk. Defaults to \".\".\n"
 		"--port <listen-port>  Sets the port to listen on (for all interfaces)\n"
 		"                      defaults to 6881\n"
+		"--response-size <n>   Specifies the number of DHT nodes to return in\n"
+		"                      response to a query. Defaults to 16\n"
 		"\n"
 		"\n"
 	);
@@ -1088,6 +1090,21 @@ int main(int argc, char* argv[])
 				return 1;
 			}
 			port = atoi(argv[i]);
+		}
+		else if (argv[i] == "--response-size"_s)
+		{
+			++i;
+			if (i >= argc)
+			{
+				fprintf(stderr, "--response-size expects a number argument\n");
+				return 1;
+			}
+			nodes_in_response = atoi(argv[i]);
+			if (nodes_in_response <= 0)
+			{
+				fprintf(stderr, "invalid number of nodes: %d\n", nodes_in_response);
+				return 1;
+			}
 		}
 		else if (argv[i] == "--no-verify-id"_s)
 		{
