@@ -51,6 +51,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <boost/crc.hpp>
 #include <boost/system/error_code.hpp>
 #include <boost/circular_buffer.hpp>
+#include <boost/asio/steady_timer.hpp>
 
 #include "bdecode.hpp"
 #include "bencode.hpp"
@@ -64,7 +65,7 @@ using boost::asio::ip::udp;
 using boost::asio::ip::address_v4;
 using boost::asio::ip::address_v6;
 using boost::asio::ip::address;
-using boost::asio::deadline_timer;
+using boost::asio::steady_timer;
 using boost::system::error_code;
 using boost::asio::buffer;
 using std::chrono::steady_clock;
@@ -155,7 +156,7 @@ std::string suffix(int v)
 }
 #endif
 
-void print_stats(deadline_timer& stats_timer, error_code const& ec)
+void print_stats(steady_timer& stats_timer, error_code const& ec)
 {
 	if (ec) return;
 
@@ -212,7 +213,7 @@ void print_stats(deadline_timer& stats_timer, error_code const& ec)
 
 	fflush(stdout);
 
-	stats_timer.expires_from_now(boost::posix_time::seconds(print_stats_interval));
+	stats_timer.expires_from_now(seconds(print_stats_interval));
 	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
 }
 
@@ -433,7 +434,7 @@ std::atomic<uint8_t*> secret1(nullptr);
 std::atomic<uint8_t*> secret2(nullptr);
 std::atomic<uint8_t*> intermediate(nullptr);
 
-void rotate_secrets(deadline_timer& secrets_timer, std::random_device& r, error_code const& ec)
+void rotate_secrets(steady_timer& secrets_timer, std::random_device& r, error_code const& ec)
 {
 	if (ec) return;
 
@@ -455,7 +456,7 @@ void rotate_secrets(deadline_timer& secrets_timer, std::random_device& r, error_
 	secret1 = i;
 	intermediate = old_secret;
 
-	secrets_timer.expires_from_now(boost::posix_time::seconds(rotate_secrets_interval));
+	secrets_timer.expires_from_now(seconds(rotate_secrets_interval));
 	secrets_timer.async_wait(std::bind(&rotate_secrets, std::ref(secrets_timer), std::ref(r), _1));
 }
 
@@ -972,7 +973,7 @@ void print_usage()
 }
 
 void signal_handler(error_code const& e, int const signo, signal_set& signals
-	, deadline_timer& stats_timer, io_service& ios)
+	, steady_timer& stats_timer, io_service& ios)
 {
 	error_code ec;
 	if (signo == SIGHUP) {
@@ -1154,8 +1155,8 @@ int main(int argc, char* argv[])
 
 	io_service ios;
 
-	deadline_timer stats_timer(ios);
-	stats_timer.expires_from_now(boost::posix_time::seconds(print_stats_interval));
+	steady_timer stats_timer(ios);
+	stats_timer.expires_from_now(seconds(print_stats_interval));
 	stats_timer.async_wait(std::bind(&print_stats, std::ref(stats_timer), _1));
 
 	std::random_device r;
@@ -1173,8 +1174,8 @@ int main(int argc, char* argv[])
 		intermediate = new uint8_t[20];
 	}
 
-	deadline_timer secrets_timer(ios);
-	secrets_timer.expires_from_now(boost::posix_time::seconds(rotate_secrets_interval));
+	steady_timer secrets_timer(ios);
+	secrets_timer.expires_from_now(seconds(rotate_secrets_interval));
 	secrets_timer.async_wait(std::bind(&rotate_secrets, std::ref(secrets_timer), std::ref(r), _1));
 
 	std::vector<std::thread> threads;
