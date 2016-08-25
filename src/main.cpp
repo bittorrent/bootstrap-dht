@@ -601,6 +601,13 @@ struct router_thread
 		char random_target[20];
 		std::generate(random_target, random_target + 20, &std::rand);
 		b.add_string("target"); b.add_string(random_target, sizeof(random_target));
+		b.add_string("want");
+		{
+			b.open_list();
+			b.add_string("n4");
+			b.add_string("n6");
+			b.close_list();
+		}
 		b.close_dict();
 
 		b.add_string("t"); b.add_string(transaction_id);
@@ -847,7 +854,7 @@ struct router_thread
 					std::string nodes4 = a.dict_find_string_value("nodes", "");
 					fprintf(stderr, "received %d nodes4 from x-pollinate node\n"
 						, int(nodes4.size() / 26));
-					char const* end = nodes4.data() + nodes4.size();
+					char const* end = nodes4.data() + nodes4.size() - 6 - 20;
 					for (char const* i = nodes4.data(); i < end; i += 6 + 20)
 					{
 						address_v4::bytes_type b;
@@ -862,7 +869,7 @@ struct router_thread
 					std::string nodes6 = a.dict_find_string_value("nodes6", "");
 					fprintf(stderr, "received %d nodes6 from x-pollinate node\n"
 						, int(nodes6.size() / 38));
-					char const* end = nodes6.data() + nodes6.size();
+					char const* end = nodes6.data() + nodes6.size() - 18 - 20;
 					for (char const* i = nodes6.data(); i < end; i += 18 + 20)
 					{
 						address_v6::bytes_type b;

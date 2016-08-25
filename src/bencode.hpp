@@ -37,6 +37,8 @@ struct bencoder
 
 	void open_dict() { if (m_buf < m_end) *m_buf++ = 'd'; }
 	void close_dict() { if (m_buf < m_end) *m_buf++ = 'e'; }
+	void open_list() { if (m_buf < m_end) *m_buf++ = 'l'; }
+	void close_list() { if (m_buf < m_end) *m_buf++ = 'e'; }
 	void add_string(char const* str, size_t len)
 	{
 		m_buf += std::snprintf(m_buf, m_end - m_buf, "%zu:", len);
