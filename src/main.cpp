@@ -854,8 +854,8 @@ struct router_thread
 					std::string nodes4 = a.dict_find_string_value("nodes", "");
 					fprintf(stderr, "received %d nodes4 from x-pollinate node\n"
 						, int(nodes4.size() / 26));
-					char const* end = nodes4.data() + nodes4.size() - 6 - 20;
-					for (char const* i = nodes4.data(); i < end; i += 6 + 20)
+					char const* end = nodes4.data() + nodes4.size();
+					for (char const* i = nodes4.data(); end - i >= 6 + 20; i += 6 + 20)
 					{
 						address_v4::bytes_type b;
 						std::memcpy(b.data(), i, b.size());
@@ -869,8 +869,8 @@ struct router_thread
 					std::string nodes6 = a.dict_find_string_value("nodes6", "");
 					fprintf(stderr, "received %d nodes6 from x-pollinate node\n"
 						, int(nodes6.size() / 38));
-					char const* end = nodes6.data() + nodes6.size() - 18 - 20;
-					for (char const* i = nodes6.data(); i < end; i += 18 + 20)
+					char const* end = nodes6.data() + nodes6.size();
+					for (char const* i = nodes6.data(); end - i >= 18 + 20; i += 18 + 20)
 					{
 						address_v6::bytes_type b;
 						std::memcpy(b.data(), i, b.size());
