@@ -77,7 +77,9 @@ struct node_buffer
 	int size() const { return m_current_max_size; }
 
 	// returns two spans containing the peer IP, port and node IDs. The second
-	// span may be empty.
+	// span may be empty. Note how we advance the read cursor by one node,
+	// regardless of how many nodes we returned, this is to maximize the memory
+	// cache and return each node a few times before moving past it.
 	std::array<span<char const>, 2>
 	get_nodes(int const num_nodes)
 	{
@@ -101,7 +103,7 @@ struct node_buffer
 			std::array<span<char const>, 2> const ret{{
 				{reinterpret_cast<char const*>(&m_buffer[m_read_cursor]), num_nodes * sizeof(node_entry_t)}
 				, {}}};
-			m_read_cursor += num_nodes;
+			++m_read_cursor;
 			return ret;
 		}
 
@@ -113,7 +115,7 @@ struct node_buffer
 			{reinterpret_cast<char const*>(&m_buffer[m_read_cursor]), slice1 * sizeof(node_entry_t)}
 			, {reinterpret_cast<char const*>(&m_buffer[0]), slice2 * sizeof(node_entry_t)}
 		}};
-		m_read_cursor = slice2;
+		++m_read_cursor;
 		return ret;
 	}
 
