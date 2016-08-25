@@ -162,22 +162,58 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 
 	time_point const now = steady_clock::now();
 
+#ifdef CLIENTS_STAT
+	std::vector<std::pair<int, uint16_t>> ordered;
+	{
+		std::lock_guard<std::mutex> l(client_mutex);
+		for (auto i : client_histogram) {
+			ordered.emplace_back(i.second, i.first);
+		}
+		client_histogram.clear();
+	}
+	std::sort(ordered.begin(), ordered.end());
+	char client_dist[200];
+	client_dist[0] = '\0';
+	int len = 0;
+	for (auto i : ordered) {
+		len += snprintf(client_dist + len, sizeof(client_dist) - len
+			, "[%c%c: %d] ", (i.second >> 8) & 0xff, i.second & 0xff, i.first);
+	}
+#endif
+
 	// every 20th line is a repeat of the header
 	static std::uint32_t cnt = 0;
 	if (cnt == 0)
 	{
-		printf("%9s%10s%10s%10s%10s%10s%10s%10s%10s%10s\n"
-			, "time(ms)", "in", "inv-enc", "inv-src", "id-fail"
-			, "out-ping", "short-tid", "inv-pong", "added", "backup");
+		printf("%7s%10s%10s%10s%10s%10s%10s%10s%10s%10s"
+#ifdef DEBUG_STATS
+			"%8s%8s%8s%8s"
+#endif
+#ifdef CLIENTS_STAT
+			" %s"
+#endif
+			"\n"
+			, "time(s)", "in", "inv-enc", "inv-src", "id-fail"
+			, "out-ping", "short-tid", "inv-pong", "added", "backup"
+#ifdef DEBUG_STATS
+			, "buf1", "buf2", "buf3", "buf4"
+#endif
+#ifdef CLIENTS_STAT
+			, "client distribution"
+#endif
+			);
 	}
 	cnt = (cnt + 1) % 20;
 
-	printf("%9" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u"
+	printf("%7" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u"
 #ifdef DEBUG_STATS
-		"node-buf: [%s %s %s %s]"
+		"%8s%8s%8s%8s"
+#endif
+#ifdef CLIENTS_STAT
+		" %s"
 #endif
 		"\n"
-		, duration_cast<milliseconds>(now - stats_start).count()
+		, duration_cast<seconds>(now - stats_start).count()
 		, incoming_queries.exchange(0)
 		, invalid_encoding.exchange(0)
 		, invalid_src_address.exchange(0)
@@ -193,23 +229,12 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 		, suffix(nodebuf_size[2].load()).c_str()
 		, suffix(nodebuf_size[3].load()).c_str()
 #endif
+#ifdef CLIENTS_STAT
+		, client_dist
+#endif
 		);
 
 	stats_start = now;
-
-#ifdef CLIENTS_STAT
-	std::lock_guard<std::mutex> l(client_mutex);
-	std::vector<std::pair<int, uint16_t>> ordered;
-	for (auto i : client_histogram) {
-		ordered.emplace_back(i.second, i.first);
-	}
-	std::sort(ordered.begin(), ordered.end());
-	for (auto i : ordered) {
-		printf("[%c%c: %d] ", (i.second >> 8) & 0xff, i.second & 0xff, i.first);
-	}
-	printf("\n");
-	client_histogram.clear();
-#endif
 
 	fflush(stdout);
 
