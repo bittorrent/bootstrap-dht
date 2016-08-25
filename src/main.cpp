@@ -587,7 +587,7 @@ struct router_thread
 	{
 		char remote_ip[18];
 		size_t remote_ip_len = build_ip_field(n.ep, remote_ip);
-		std::string const transaction_id = compute_tid(secret1, remote_ip, remote_ip_len);
+		std::array<char, 4> transaction_id = compute_tid(secret1, remote_ip, remote_ip_len);
 		bound_socket& sock = socks[n.sock_idx];
 
 		// send find_nodes to this node
