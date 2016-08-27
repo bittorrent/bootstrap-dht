@@ -43,6 +43,13 @@ struct queued_node_t
 	int sock_idx;
 };
 
+enum class insert_response
+{
+	inserted,
+	duplicate,
+	full
+};
+
 template <typename Address>
 struct ping_queue
 {
@@ -82,14 +89,14 @@ struct ping_queue
 	}
 
 	// returns whether the node was inserted or not
-	bool insert_node(Address const& addr, std::uint16_t const port, int const sock_idx
-		, time_point const now)
+	insert_response insert_node(Address const& addr, std::uint16_t const port
+		, int const sock_idx, time_point const now)
 	{
 		assert(addr != Address::any());
 		assert(now >= m_created);
 
 		// prevent duplicate entries
-		if (m_ips.count(addr)) return false;
+		if (m_ips.count(addr)) return insert_response::duplicate;
 
 		// the number of nodes we allow in the queue before we start dropping
 		// nodes (to stay below the limi)
@@ -103,7 +110,7 @@ struct ping_queue
 			// once we do, we increase the drop rate the closer we get to the limit
 			++m_round_robin;
 			if (m_round_robin < (m_queue.size() - low_watermark) * 256 / (m_capacity - low_watermark))
-				return false;
+				return insert_response::full;
 		}
 
 		// we primarily want to keep quality nodes in our list.
@@ -118,7 +125,7 @@ struct ping_queue
 
 		m_queue.push_back({addr.to_bytes(), expire, std::uint16_t(sock_idx), port});
 		m_ips.insert(addr);
-		return true;
+		return insert_response::inserted;
 	}
 
 private:

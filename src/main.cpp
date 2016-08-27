@@ -127,6 +127,7 @@ std::unordered_map<uint16_t, int> client_histogram;
 */
 
 std::atomic<uint32_t> incoming_queries;
+std::atomic<uint32_t> incoming_duplicates;
 std::atomic<uint32_t> invalid_encoding;
 std::atomic<uint32_t> invalid_src_address;
 std::atomic<uint32_t> failed_nodeid_queries;
@@ -188,7 +189,7 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 	static std::uint32_t cnt = 0;
 	if (cnt == 0)
 	{
-		printf("%7s%10s%10s%10s%10s%10s%10s%10s%10s%10s"
+		printf("%7s%10s%10s%10s%10s%10s%10s%10s%10s%10s%10s"
 #ifdef DEBUG_STATS
 			"%8s%8s%8s%8s"
 #endif
@@ -196,7 +197,7 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 			" %s"
 #endif
 			"\n"
-			, "time(s)", "in", "inv-enc", "inv-src", "id-fail"
+			, "time(s)", "in", "dup-ip", "inv-enc", "inv-src", "id-fail"
 			, "out-ping", "short-tid", "inv-pong", "added", "backup"
 #ifdef DEBUG_STATS
 			, "buf1", "buf2", "buf3", "buf4"
@@ -208,7 +209,7 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 	}
 	cnt = (cnt + 1) % 20;
 
-	printf("%7" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u"
+	printf("%7" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u%10u"
 #ifdef DEBUG_STATS
 		"%8s%8s%8s%8s"
 #endif
@@ -218,6 +219,7 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 		"\n"
 		, duration_cast<seconds>(now - stats_start).count()
 		, incoming_queries.exchange(0)
+		, incoming_duplicates.exchange(0)
 		, invalid_encoding.exchange(0)
 		, invalid_src_address.exchange(0)
 		, failed_nodeid_queries.exchange(0)
@@ -739,16 +741,17 @@ struct router_thread
 
 	template <typename Address>
 	std::array<span<char const>, 3> get_nodes(node_buffer<Address>& buffer
-		, boost::circular_buffer<typename node_buffer<Address>::node_entry_t> const& last_nodes)
+		, boost::circular_buffer<typename node_buffer<Address>::node_entry_t> const& last_nodes
+		, int const requested_nodes)
 	{
 		size_t const entry_size = sizeof(typename node_buffer<Address>::node_entry_t);
-		auto const ranges = buffer.get_nodes(nodes_in_response);
+		auto const ranges = buffer.get_nodes(requested_nodes);
 
 		size_t len = 0;
 		for (auto const& r : ranges) len += r.size();
 
 		int const num_nodes = len / entry_size;
-		if (num_nodes >= nodes_in_response || last_nodes.empty())
+		if (num_nodes >= requested_nodes || last_nodes.empty())
 		{
 
 			return {{ranges[0], ranges[1], {}}};
@@ -775,7 +778,7 @@ struct router_thread
 			return;
 		}
 
-		bool is_v4 = ep.protocol() == udp::v4();
+		bool const is_v4 = ep.protocol() == udp::v4();
 
 		bdecode_node e;
 		std::error_code err;
@@ -920,6 +923,46 @@ struct router_thread
 			|| cmd == "get_peers"
 			|| cmd == "get")
 		{
+			insert_response inserted = insert_response::inserted;
+
+			// don't save read-only nodes
+			// nor obvious invalid IPs
+			bdecode_node ro = e.dict_find_int("ro");
+			if ((!ro || ro.int_value() == 0) && is_valid_ip(ep))
+			{
+				time_point const now = steady_clock::now();
+
+				if (is_v4)
+				{
+					node_entry_v4 e;
+					e.ip = ep.address().to_v4().to_bytes();
+					e.port = htons(ep.port());
+					std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
+					last_nodes4.push_back(e);
+
+					// ping this node later, we may want to add it to our node buffer
+					inserted = ping_queue4.insert_node(
+						ep.address().to_v4(), ep.port()
+						, &sock - &socks[0], now);
+				}
+				else
+				{
+					node_entry_v6 e;
+					e.ip = ep.address().to_v6().to_bytes();
+					e.port = htons(ep.port());
+					std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
+					last_nodes6.push_back(e);
+
+					// ping this node later, we may want to add it to our node buffer
+					inserted = ping_queue6.insert_node(
+						ep.address().to_v6(), ep.port()
+						, &sock - &socks[0], now);
+				}
+			}
+
+			if (inserted == insert_response::duplicate)
+				++incoming_duplicates;
+
 			bencoder b(response, sizeof(response));
 			b.open_dict();
 
@@ -931,13 +974,6 @@ struct router_thread
 			b.open_dict();
 			b.add_string("id");
 			b.add_string(sock.node_id.data(), sock.node_id.size());
-
-			// This is here for backwards compatibility
-			// except there is a bug in uTorrent where sending this
-			// aborts the bootstrap sequence, causing a 60 second delay
-			// for it to be retried (and succeed the second time)
-			//			b.add_string("ip");
-			//			b.add_string(remote_ip, 4);
 
 			if (cmd != "ping")
 			{
@@ -963,17 +999,21 @@ struct router_thread
 					want_v6 = !is_v4;
 				}
 
+				// only return three nodes to duplicate requests, to save bandwidth
+				int const num_nodes = (inserted == insert_response::duplicate)
+					? std::min(3, nodes_in_response) : nodes_in_response;
+
 				if (want_v4)
 				{
 					b.add_string("nodes");
-					auto const node_ranges = get_nodes(node_buffer4, last_nodes4);
+					auto const node_ranges = get_nodes(node_buffer4, last_nodes4, num_nodes);
 					b.add_string_concatenate(node_ranges);
 				}
 
 				if (want_v6)
 				{
 					b.add_string("nodes6");
-					auto const node_ranges = get_nodes(node_buffer6, last_nodes6);
+					auto const node_ranges = get_nodes(node_buffer6, last_nodes6, num_nodes);
 					b.add_string_concatenate(node_ranges);
 				}
 			}
@@ -1001,43 +1041,6 @@ struct router_thread
 						, ep.port(), ec.value(), ec.message().c_str());
 			else if (len <= 0)
 				fprintf(stderr, "send_to failed: return=%d\n", len);
-
-			// filter obvious invalid IPs
-			if (!is_valid_ip(ep)) return;
-
-			// don't save read-only nodes
-			bdecode_node ro = e.dict_find_int("ro");
-			if (ro && ro.int_value() != 0) return;
-
-			time_point const now = steady_clock::now();
-
-			// don't add the same IP multiple times in a row
-			if (is_v4 &&
-				(last_nodes4.empty() || last_nodes4.back().ip != ep.address().to_v4().to_bytes()))
-			{
-				node_entry_v4 e;
-				e.ip = ep.address().to_v4().to_bytes();
-				e.port = htons(ep.port());
-				std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
-				last_nodes4.push_back(e);
-
-				// ping this node later, we may want to add it to our node buffer
-				ping_queue4.insert_node(ep.address().to_v4(), ep.port()
-					, &sock - &socks[0], now);
-			}
-			else if (!is_v4 &&
-				(last_nodes6.empty() || last_nodes6.back().ip != ep.address().to_v6().to_bytes()))
-			{
-				node_entry_v6 e;
-				e.ip = ep.address().to_v6().to_bytes();
-				e.port = htons(ep.port());
-				std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
-				last_nodes6.push_back(e);
-
-				// ping this node later, we may want to add it to our node buffer
-				ping_queue6.insert_node(ep.address().to_v6(), ep.port()
-					, &sock - &socks[0], now);
-			}
 		}
 	}
 
