@@ -114,6 +114,7 @@ struct node_buffer
 			, {reinterpret_cast<char const*>(&m_buffer[0]), slice2 * sizeof(node_entry_t)}
 		}};
 		m_read_cursor = slice2;
+		assert(slice1 + slice2 == num_nodes);
 		return ret;
 	}
 

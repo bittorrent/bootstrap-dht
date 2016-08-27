@@ -50,14 +50,14 @@ TEST_CASE("ping_queue overrun")
 
 	ping_queue<address_v4> q(32, start);
 
-	CHECK(q.insert_node(v4::from_string("1.2.3.4"), 6881, 0, start) == true);
+	CHECK(q.insert_node(v4::from_string("1.2.3.4"), 6881, 0, start) == insert_response::inserted);
 	CHECK(q.size() == 1);
-	CHECK(q.insert_node(v4::from_string("1.2.3.5"), 6881, 0, start) == true);
+	CHECK(q.insert_node(v4::from_string("1.2.3.5"), 6881, 0, start) == insert_response::inserted);
 	CHECK(q.size() == 2);
 
 	int added = 2;
 	for (int i = 0; i < 64; ++i) {
-		added += q.insert_node(v4::from_string("1.2.4." + std::to_string(i)), 6881, 0, start);
+		added += (q.insert_node(v4::from_string("1.2.4." + std::to_string(i)), 6881, 0, start) == insert_response::inserted);
 	}
 	// despite adding 66 nodes, we should not have exceeded our capacity
 	CHECK(q.size() <= 32);
@@ -74,11 +74,11 @@ TEST_CASE("ping_queue duplicate")
 
 	ping_queue<address_v4> q(32, start);
 
-	CHECK(q.insert_node(v4::from_string("1.2.3.4"), 6881, 0, start) == true);
+	CHECK(q.insert_node(v4::from_string("1.2.3.4"), 6881, 0, start) == insert_response::inserted);
 	CHECK(q.size() == 1);
 
 	// duplicates are not allowed
-	CHECK(q.insert_node(v4::from_string("1.2.3.4"), 6881, 0, start) == false);
+	CHECK(q.insert_node(v4::from_string("1.2.3.4"), 6881, 0, start) == insert_response::duplicate);
 	CHECK(q.size() == 1);
 
 	// however, once we pop it, we can queue it up again
@@ -88,7 +88,7 @@ TEST_CASE("ping_queue duplicate")
 	CHECK(n.sock_idx == 0);
 	CHECK(q.size() == 0);
 
-	CHECK(q.insert_node(v4::from_string("1.2.3.4"), 6881, 0, start) == true);
+	CHECK(q.insert_node(v4::from_string("1.2.3.4"), 6881, 0, start) == insert_response::inserted);
 	CHECK(q.size() == 1);
 }
 
@@ -98,7 +98,7 @@ TEST_CASE("ping_queue expire")
 
 	ping_queue<address_v4> q(32, start);
 
-	CHECK(q.insert_node(v4::from_string("1.2.3.4"), 6881, 0, start) == true);
+	CHECK(q.insert_node(v4::from_string("1.2.3.4"), 6881, 0, start) == insert_response::inserted);
 	CHECK(q.size() == 1);
 
 	// 14 minutes and 58 seconds later, we still should not ping the node
