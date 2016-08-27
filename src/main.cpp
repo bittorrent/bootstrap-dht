@@ -931,7 +931,7 @@ struct router_thread
 			if ((!ro || ro.int_value() == 0) && is_valid_ip(ep))
 			{
 				time_point const now = steady_clock::now();
-   
+
 				if (is_v4)
 				{
 					node_entry_v4 e;
@@ -939,7 +939,7 @@ struct router_thread
 					e.port = htons(ep.port());
 					std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
 					last_nodes4.push_back(e);
-   
+
 					// ping this node later, we may want to add it to our node buffer
 					inserted = ping_queue4.insert_node(
 						ep.address().to_v4(), ep.port()
@@ -952,7 +952,7 @@ struct router_thread
 					e.port = htons(ep.port());
 					std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
 					last_nodes6.push_back(e);
-   
+
 					// ping this node later, we may want to add it to our node buffer
 					inserted = ping_queue6.insert_node(
 						ep.address().to_v6(), ep.port()
@@ -1001,7 +1001,7 @@ struct router_thread
 
 				// only return three nodes to duplicate requests, to save bandwidth
 				int const num_nodes = (inserted == insert_response::duplicate)
-					? 3 : nodes_in_response;
+					? std::min(3, nodes_in_response) : nodes_in_response;
 
 				if (want_v4)
 				{
