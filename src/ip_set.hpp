@@ -91,6 +91,7 @@ struct hash<ipv6_prefix_type> : hash<uint32_t>
 template <typename Address>
 struct ip_set
 {
+	// returns true if the address was not already in the set
 	bool insert(Address const& addr)
 	{ return m_ips.insert(extract_key(addr)).second; }
 
@@ -102,6 +103,9 @@ struct ip_set
 
 	bool operator==(ip_set const& rh) const
 	{ return m_ips == rh.m_ips; }
+
+	size_t size() const { return m_ips.size(); }
+	void clear() { m_ips.clear(); }
 
 private:
 	std::unordered_set<decltype(extract_key(std::declval<Address>()))> m_ips;

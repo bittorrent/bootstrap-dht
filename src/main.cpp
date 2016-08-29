@@ -126,13 +126,12 @@ std::unordered_map<uint16_t, int> client_histogram;
 
 */
 
-std::atomic<uint32_t> incoming_queries;
+std::atomic<uint32_t> responses;
 std::atomic<uint32_t> incoming_duplicates;
-std::atomic<uint32_t> invalid_encoding;
+std::atomic<uint32_t> invalid_req;
 std::atomic<uint32_t> invalid_src_address;
 std::atomic<uint32_t> failed_nodeid_queries;
 std::atomic<uint32_t> outgoing_pings;
-std::atomic<uint32_t> short_tid_pongs;
 std::atomic<uint32_t> invalid_pongs;
 std::atomic<uint32_t> added_nodes;
 std::atomic<uint32_t> backup_nodes_returned;
@@ -185,11 +184,11 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 	}
 #endif
 
-	// every 20th line is a repeat of the header
-	static std::uint32_t cnt = 0;
+	// every 40th line is a repeat of the header
+	static std::uint8_t cnt = 0;
 	if (cnt == 0)
 	{
-		printf("%7s%10s%10s%10s%10s%10s%10s%10s%10s%10s%10s"
+		printf("%7s%10s%10s%10s%10s%10s%10s%10s%10s%10s"
 #ifdef DEBUG_STATS
 			"%8s%8s%8s%8s"
 #endif
@@ -197,8 +196,8 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 			" %s"
 #endif
 			"\n"
-			, "time(s)", "in", "dup-ip", "inv-enc", "inv-src", "id-fail"
-			, "out-ping", "short-tid", "inv-pong", "added", "backup"
+			, "time(s)", "dup-ip", "inv-msg", "inv-src", "resp"
+			, "id-fail", "out-ping", "inv-pong", "added", "backup"
 #ifdef DEBUG_STATS
 			, "buf1", "buf2", "buf3", "buf4"
 #endif
@@ -207,9 +206,9 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 #endif
 			);
 	}
-	cnt = (cnt + 1) % 20;
+	cnt = (cnt + 1) % 40;
 
-	printf("%7" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u%10u"
+	printf("%7" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u"
 #ifdef DEBUG_STATS
 		"%8s%8s%8s%8s"
 #endif
@@ -218,13 +217,12 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 #endif
 		"\n"
 		, duration_cast<seconds>(now - stats_start).count()
-		, incoming_queries.exchange(0)
 		, incoming_duplicates.exchange(0)
-		, invalid_encoding.exchange(0)
+		, invalid_req.exchange(0)
 		, invalid_src_address.exchange(0)
+		, responses.exchange(0)
 		, failed_nodeid_queries.exchange(0)
 		, outgoing_pings.exchange(0)
-		, short_tid_pongs.exchange(0)
 		, invalid_pongs.exchange(0)
 		, added_nodes.exchange(0)
 		, backup_nodes_returned.exchange(0)
@@ -428,7 +426,7 @@ bool verify_tid(span<char> tid, uint8_t const* secret1, uint8_t const* secret2
 
 // determines if an IP is valid to be pinged for
 // possible inclusion in our node list
-bool is_valid_ip(udp::endpoint const& ep)
+bool is_valid_ep(udp::endpoint const& ep)
 {
 	if (ep.port() == 0) return false;
 	if (ep.protocol() == udp::v4())
@@ -518,6 +516,22 @@ std::string storage_filename(char const* base_path, int const threadid, bool con
 	std::snprintf(name, sizeof(name), "%s/node-buffer-%d-%s"
 		, base_path, threadid, v6 ? "v6" : "v4");
 	return name;
+}
+
+bool check_duplicate(address const& a, ip_set<address_v4>& recent4, ip_set<address_v6>& recent6)
+{
+	if (a.is_v4())
+	{
+		// without an upper limit, we would be vulnerable to a DoS
+		// attack by spoofed source IPs.
+		if (recent4.size() > 4000000) return recent4.count(a.to_v4());
+
+		// insert returns true if the insertion took place
+		// i.e. it was not already in there, not a duplicate
+		return recent4.insert(a.to_v4()) == false;
+	}
+	if (recent6.size() > 4000000) return recent6.count(a.to_v6());
+	return recent6.insert(a.to_v6()) == false;
 }
 
 struct router_thread
@@ -673,6 +687,7 @@ struct router_thread
 		}
 
 		time_point last_cross_pollinate = steady_clock::now();
+		time_point last_reset_recent = steady_clock::now();
 		for (;;)
 		{
 #ifdef DEBUG_STATS
@@ -688,6 +703,15 @@ struct router_thread
 			{
 				last_cross_pollinate = now;
 				send_request({bootstrap_node, 0});
+			}
+
+			if (now - last_reset_recent > minutes(10))
+			{
+				// reset the recent node sets regularly, to allow
+				// nodes to send another request
+				last_reset_recent = now;
+				recent_reqs4.clear();
+				recent_reqs6.clear();
 			}
 
 			// if we need to ping nodes, do that now
@@ -772,7 +796,7 @@ struct router_thread
 		using libtorrent::bdecode_node;
 		using libtorrent::bdecode;
 
-		if (ep.port() == 0)
+		if (!is_valid_ep(ep))
 		{
 			++invalid_src_address;
 			return;
@@ -785,7 +809,7 @@ struct router_thread
 		int const ret = bdecode(sock.packet, &sock.packet[len], e, err, nullptr, 5, 100);
 		if (err || ret != 0 || e.type() != bdecode_node::dict_t)
 		{
-			++invalid_encoding;
+			++invalid_req;
 			return;
 		}
 
@@ -799,18 +823,20 @@ struct router_thread
 			++client_histogram[client];
 		}
 #endif
-		//		printf("R: %s\n", print_entry(e, true).c_str());
-
 		if (e.type() != bdecode_node::dict_t)
 		{
-			++invalid_encoding;
+			++invalid_req;
 			return;
 		}
 
 		// find the interesting fields from the message.
 		// i.e. the kind of query, the transaction id and the node id
 		std::string transaction_id = e.dict_find_string_value("t");
-		if (transaction_id.empty()) return;
+		if (transaction_id.empty())
+		{
+			++invalid_req;
+			return;
+		}
 
 		std::string cmd = e.dict_find_string_value("q");
 
@@ -818,10 +844,18 @@ struct router_thread
 		if (!a)
 		{
 			a = e.dict_find_dict("r");
-			if (!a) return;
+			if (!a)
+			{
+				++invalid_req;
+				return;
+			}
 		}
 		bdecode_node node_id = a.dict_find_string("id");
-		if (!node_id || node_id.string_length() != 20) return;
+		if (!node_id || node_id.string_length() != 20)
+		{
+			++invalid_req;
+			return;
+		}
 
 		// build the IP response buffer, with the source
 		// IP and port that we observe from this node
@@ -830,9 +864,11 @@ struct router_thread
 
 		if (cmd.empty())
 		{
+			// this is a response to one of our pings
+			// or find_nodes requests
 			if (transaction_id.size() != 4)
 			{
-				++short_tid_pongs;
+				++invalid_pongs;
 				return;
 			}
 
@@ -848,10 +884,6 @@ struct router_thread
 				return;
 			}
 
-			// this shouldn't really happen
-			if (!is_valid_ip(ep))
-				return;
-
 			if (verify_node_id)
 			{
 				// verify that the node ID is valid for the source IP
@@ -860,7 +892,10 @@ struct router_thread
 				if (!compare_id_prefix(node_id.string_ptr(), h.data()))
 				{
 					if (ep.address().is_v6())
+					{
+						++failed_nodeid_queries;
 						return;
+					}
 
 					// backwards compatibility. We'll save a lot of CPU
 					// once we can remove this
@@ -926,9 +961,9 @@ struct router_thread
 			insert_response inserted = insert_response::inserted;
 
 			// don't save read-only nodes
-			// nor obvious invalid IPs
+			// for obvious invalid IPs
 			bdecode_node ro = e.dict_find_int("ro");
-			if ((!ro || ro.int_value() == 0) && is_valid_ip(ep))
+			if (!ro || ro.int_value() == 0)
 			{
 				time_point const now = steady_clock::now();
 
@@ -938,6 +973,13 @@ struct router_thread
 					e.ip = ep.address().to_v4().to_bytes();
 					e.port = htons(ep.port());
 					std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
+
+					if (!last_nodes4.empty()
+						&& last_nodes4.back().ip == e.ip)
+					{
+						++incoming_duplicates;
+						return;
+					}
 					last_nodes4.push_back(e);
 
 					// ping this node later, we may want to add it to our node buffer
@@ -951,6 +993,13 @@ struct router_thread
 					e.ip = ep.address().to_v6().to_bytes();
 					e.port = htons(ep.port());
 					std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
+
+					if (!last_nodes6.empty()
+						&& last_nodes6.back().ip == e.ip)
+					{
+						++incoming_duplicates;
+						return;
+					}
 					last_nodes6.push_back(e);
 
 					// ping this node later, we may want to add it to our node buffer
@@ -960,8 +1009,10 @@ struct router_thread
 				}
 			}
 
-			if (inserted == insert_response::duplicate)
-				++incoming_duplicates;
+			bool const is_duplicate = (inserted == insert_response::duplicate)
+				|| check_duplicate(ep.address(), recent_reqs4, recent_reqs6);
+
+			if (is_duplicate) ++incoming_duplicates;
 
 			bencoder b(response, sizeof(response));
 			b.open_dict();
@@ -1000,7 +1051,7 @@ struct router_thread
 				}
 
 				// only return three nodes to duplicate requests, to save bandwidth
-				int const num_nodes = (inserted == insert_response::duplicate)
+				int const num_nodes = is_duplicate
 					? std::min(3, nodes_in_response) : nodes_in_response;
 
 				if (want_v4)
@@ -1032,7 +1083,7 @@ struct router_thread
 			}
 
 			b.close_dict();
-			++incoming_queries;
+			++responses;
 
 			int len = sock.sock.send_to(buffer(response, b.end() - response), ep, 0, ec);
 			if (ec)
@@ -1058,9 +1109,15 @@ struct router_thread
 	boost::circular_buffer<node_entry_v4> last_nodes4;
 	boost::circular_buffer<node_entry_v6> last_nodes6;
 
+	// the IP of every request is inserted in one of these sets. If we receive
+	// a request from an IP that's already in here, we return fewer nodes
+	ip_set<address_v4> recent_reqs4;
+	ip_set<address_v6> recent_reqs6;
+
 	udp::endpoint ep;
 
-	// the response packet
+	// we handle one request at a time (per thread), this is the buffer we
+	// build the response in
 	char response[1500];
 
 	signal_set signals;
