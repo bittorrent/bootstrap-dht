@@ -6,6 +6,8 @@ lib boost-system : : <name>boost_system ;
 
 project
 	: requirements
+	<source>../src/city.cc
+	<source>../src/ip_set.cpp
 	<library>boost-system
 	<include>../src
 	: default-build

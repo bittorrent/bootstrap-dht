@@ -12,7 +12,7 @@ feature.compose <debug_stats>on : <define>DEBUG_STATS=1 ;
 exe dht-bootstrap
 
 	: # sources
-	src/main.cpp src/bdecode.cpp
+	src/main.cpp src/bdecode.cpp src/city.cc src/ip_set.cpp
 
 	: # requirements
 	<threading>multi
