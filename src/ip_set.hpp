@@ -33,12 +33,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <boost/asio/ip/address_v6.hpp>
 #include <boost/crc.hpp>
 
+#include "city.h"
+
 // The size of ipv6_prefix_type determines the size of the prefix to compare
 // when determining if an IPv6 address should be discarded as a duplicate
 using ipv6_prefix_type = std::array<std::uint8_t, 6>;
 
 using boost::asio::ip::address_v4;
 using boost::asio::ip::address_v6;
+
+extern std::uint64_t hash_seed;
 
 template <typename T, typename K>
 void erase_one(T& container, K const& key)
@@ -63,26 +67,20 @@ inline address_v4::bytes_type extract_key(address_v4 const& addr)
 namespace std {
 
 template <>
-struct hash<address_v4::bytes_type> : hash<uint32_t>
+struct hash<address_v4::bytes_type>
 {
 	size_t operator()(address_v4::bytes_type ip) const
 	{
-		uint32_t arg;
-		std::memcpy(&arg, &ip[0], 4);
-		return this->hash<uint32_t>::operator()(arg);
+		return CityHash64WithSeed(reinterpret_cast<char const*>(&ip[0]), ip.size(), hash_seed);
 	}
 };
 
 template <>
-struct hash<ipv6_prefix_type> : hash<uint32_t>
+struct hash<ipv6_prefix_type>
 {
 	size_t operator()(ipv6_prefix_type const ip) const
 	{
-		// this is the crc32c (Castagnoli) polynomial
-		boost::crc_optimal<32, 0x1EDC6F41, 0xFFFFFFFF, 0xFFFFFFFF, true, true> crc;
-		crc.process_block(ip.data(), ip.data() + ip.size());
-		uint32_t arg = crc.checksum();
-		return this->hash<uint32_t>::operator()(arg);
+		return CityHash64WithSeed(reinterpret_cast<char const*>(&ip[0]), ip.size(), hash_seed);
 	}
 };
 
