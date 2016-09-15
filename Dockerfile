@@ -12,7 +12,7 @@ RUN \
       libboost-system-dev \
       libboost-tools-dev \
   && \
-  bjam \
+  bjam release \
   && \
   DEBIAN_FRONTEND=noninteractive \
     apt-get -y purge --auto-remove \
