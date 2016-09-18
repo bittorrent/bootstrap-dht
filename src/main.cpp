@@ -134,10 +134,13 @@ std::atomic<uint32_t> failed_nodeid_queries;
 std::atomic<uint32_t> outgoing_pings;
 std::atomic<uint32_t> invalid_pongs;
 std::atomic<uint32_t> added_nodes;
-std::atomic<uint32_t> backup_nodes_returned;
+std::atomic<uint32_t> backup_nodes4_returned;
+std::atomic<uint32_t> backup_nodes6_returned;
 
 #ifdef DEBUG_STATS
-std::array<std::atomic<uint32_t>, 4> nodebuf_size;
+// 0: IPv4 buffer size
+// 1: IPv6 buffer size
+std::array<std::atomic<uint32_t>, 2> nodebuf_size;
 #endif
 
 time_point stats_start = steady_clock::now();
@@ -188,18 +191,18 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 	static std::uint8_t cnt = 0;
 	if (cnt == 0)
 	{
-		printf("%7s%10s%10s%10s%10s%10s%10s%10s%10s%10s"
+		printf("%7s%10s%10s%10s%10s%10s%10s%10s%10s%10s%10s"
 #ifdef DEBUG_STATS
-			"%8s%8s%8s%8s"
+			"%8s%8s"
 #endif
 #ifdef CLIENTS_STAT
 			" %s"
 #endif
 			"\n"
 			, "time(s)", "dup-ip", "inv-msg", "inv-src", "resp"
-			, "id-fail", "out-ping", "inv-pong", "added", "backup"
+			, "id-fail", "out-ping", "inv-pong", "added", "backup4", "backup6"
 #ifdef DEBUG_STATS
-			, "buf1", "buf2", "buf3", "buf4"
+			, "buf4", "buf6"
 #endif
 #ifdef CLIENTS_STAT
 			, "client distribution"
@@ -208,9 +211,9 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 	}
 	cnt = (cnt + 1) % 40;
 
-	printf("%7" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u"
+	printf("%7" PRId64 "%10u%10u%10u%10u%10u%10u%10u%10u%10u%10u"
 #ifdef DEBUG_STATS
-		"%8s%8s%8s%8s"
+		"%8s%8s"
 #endif
 #ifdef CLIENTS_STAT
 		" %s"
@@ -225,12 +228,11 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 		, outgoing_pings.exchange(0)
 		, invalid_pongs.exchange(0)
 		, added_nodes.exchange(0)
-		, backup_nodes_returned.exchange(0)
+		, backup_nodes4_returned.exchange(0)
+		, backup_nodes6_returned.exchange(0)
 #ifdef DEBUG_STATS
 		, suffix(nodebuf_size[0].load()).c_str()
 		, suffix(nodebuf_size[1].load()).c_str()
-		, suffix(nodebuf_size[2].load()).c_str()
-		, suffix(nodebuf_size[3].load()).c_str()
 #endif
 #ifdef CLIENTS_STAT
 		, client_dist
@@ -535,6 +537,17 @@ bool check_duplicate(address const& a, ip_set<address_v4>& recent4, ip_set<addre
 	return recent6.insert(a.to_v6()) == false;
 }
 
+template<typename Address>
+void inc_backup_counter();
+
+template<>
+void inc_backup_counter<address_v4>()
+{ ++backup_nodes4_returned; }
+
+template<>
+void inc_backup_counter<address_v6>()
+{ ++backup_nodes6_returned; }
+
 struct router_thread
 {
 	router_thread(char const* storage_dir, int const tid, std::vector<address> addrs)
@@ -692,8 +705,10 @@ struct router_thread
 		for (;;)
 		{
 #ifdef DEBUG_STATS
-			if (threadid < nodebuf_size.size())
-				nodebuf_size[threadid] = node_buffer4.size();
+			if (threadid == 0) {
+				nodebuf_size[0] = node_buffer4.size();
+				nodebuf_size[1] = node_buffer6.size();
+			}
 #endif
 
 			time_point const now = steady_clock::now();
@@ -778,7 +793,6 @@ struct router_thread
 		int const num_nodes = len / entry_size;
 		if (num_nodes >= requested_nodes || last_nodes.empty())
 		{
-
 			return {{ranges[0], ranges[1], {}}};
 		}
 
@@ -786,8 +800,10 @@ struct router_thread
 		// a single call. find the physical start of its buffer
 		char const* ptr = reinterpret_cast<char const*>((std::min)(last_nodes.array_one().first
 			, last_nodes.array_two().first));
-		++backup_nodes_returned;
-		return {{ranges[0], ranges[1], {ptr, last_nodes.size() * entry_size}}};
+		size_t const missing_nodes = requested_nodes - num_nodes;
+		inc_backup_counter<Address>();
+		return {{ranges[0], ranges[1]
+			, {ptr, std::min(missing_nodes, last_nodes.size()) * entry_size}}};
 	}
 
 	void process_incoming_packet(bound_socket& sock, size_t const len)
