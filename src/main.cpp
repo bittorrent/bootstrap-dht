@@ -387,6 +387,7 @@ struct bound_socket
 
 	udp::socket sock;
 	node_id_type node_id;
+	udp::endpoint ep;
 
 	// the incoming packet
 	char packet[1500];
@@ -682,8 +683,8 @@ struct router_thread
 
 		for (bound_socket& sock : socks)
 		{
-			sock.sock.async_receive_from(buffer(sock.packet, sizeof(sock.packet)), ep
-				, std::bind(&router_thread::packet_received, this, std::ref(sock), _1, _2));
+			sock.sock.async_receive_from(buffer(sock.packet, sizeof(sock.packet))
+				, sock.ep, std::bind(&router_thread::packet_received, this, std::ref(sock), _1, _2));
 		}
 
 		time_point last_cross_pollinate = steady_clock::now();
@@ -759,7 +760,7 @@ struct router_thread
 			process_incoming_packet(sock, len);
 		}
 
-		sock.sock.async_receive_from(buffer(sock.packet, sizeof(sock.packet)), ep
+		sock.sock.async_receive_from(buffer(sock.packet, sizeof(sock.packet)), sock.ep
 			, std::bind(&router_thread::packet_received, this, std::ref(sock), _1, _2));
 	}
 
@@ -796,13 +797,13 @@ struct router_thread
 		using libtorrent::bdecode_node;
 		using libtorrent::bdecode;
 
-		if (!is_valid_ep(ep))
+		if (!is_valid_ep(sock.ep))
 		{
 			++invalid_src_address;
 			return;
 		}
 
-		bool const is_v4 = ep.protocol() == udp::v4();
+		bool const is_v4 = sock.ep.protocol() == udp::v4();
 
 		bdecode_node e;
 		std::error_code err;
@@ -860,7 +861,7 @@ struct router_thread
 		// build the IP response buffer, with the source
 		// IP and port that we observe from this node
 		char remote_ip[18];
-		size_t remote_ip_len = build_ip_field(ep, remote_ip);
+		size_t remote_ip_len = build_ip_field(sock.ep, remote_ip);
 
 		if (cmd.empty())
 		{
@@ -888,10 +889,10 @@ struct router_thread
 			{
 				// verify that the node ID is valid for the source IP
 				node_id_type h;
-				generate_id(ep.address(), node_id.string_ptr()[19], h.data());
+				generate_id(sock.ep.address(), node_id.string_ptr()[19], h.data());
 				if (!compare_id_prefix(node_id.string_ptr(), h.data()))
 				{
-					if (ep.address().is_v6())
+					if (sock.ep.address().is_v6())
 					{
 						++failed_nodeid_queries;
 						return;
@@ -899,7 +900,7 @@ struct router_thread
 
 					// backwards compatibility. We'll save a lot of CPU
 					// once we can remove this
-					generate_id_sha1(ep.address(), node_id.string_ptr()[19], h.data());
+					generate_id_sha1(sock.ep.address(), node_id.string_ptr()[19], h.data());
 					if (memcmp(node_id.string_ptr(), h.data(), 4) != 0)
 					{
 						++failed_nodeid_queries;
@@ -908,8 +909,7 @@ struct router_thread
 				}
 			}
 
-			if (cross_pollinate
-				&& ep == bootstrap_node)
+			if (cross_pollinate && sock.ep == bootstrap_node)
 			{
 				// this is a response from the other bootstrap node
 				// put the nodes in the response in the ping queue
@@ -945,12 +945,12 @@ struct router_thread
 			}
 
 			if (is_v4) {
-				added_nodes += node_buffer4.insert_node(ep.address().to_v4()
-					, ep.port(), node_id.string_ptr());
+				added_nodes += node_buffer4.insert_node(sock.ep.address().to_v4()
+					, sock.ep.port(), node_id.string_ptr());
 			}
 			else {
-				added_nodes += node_buffer6.insert_node(ep.address().to_v6()
-					, ep.port(), node_id.string_ptr());
+				added_nodes += node_buffer6.insert_node(sock.ep.address().to_v6()
+					, sock.ep.port(), node_id.string_ptr());
 			}
 		}
 		else if (cmd == "ping"
@@ -970,8 +970,8 @@ struct router_thread
 				if (is_v4)
 				{
 					node_entry_v4 e;
-					e.ip = ep.address().to_v4().to_bytes();
-					e.port = htons(ep.port());
+					e.ip = sock.ep.address().to_v4().to_bytes();
+					e.port = htons(sock.ep.port());
 					std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
 
 					if (!last_nodes4.empty()
@@ -984,14 +984,14 @@ struct router_thread
 
 					// ping this node later, we may want to add it to our node buffer
 					inserted = ping_queue4.insert_node(
-						ep.address().to_v4(), ep.port()
+						sock.ep.address().to_v4(), sock.ep.port()
 						, &sock - &socks[0], now);
 				}
 				else
 				{
 					node_entry_v6 e;
-					e.ip = ep.address().to_v6().to_bytes();
-					e.port = htons(ep.port());
+					e.ip = sock.ep.address().to_v6().to_bytes();
+					e.port = htons(sock.ep.port());
 					std::memcpy(e.node_id.data(), node_id.string_ptr(), e.node_id.size());
 
 					if (!last_nodes6.empty()
@@ -1004,13 +1004,13 @@ struct router_thread
 
 					// ping this node later, we may want to add it to our node buffer
 					inserted = ping_queue6.insert_node(
-						ep.address().to_v6(), ep.port()
+						sock.ep.address().to_v6(), sock.ep.port()
 						, &sock - &socks[0], now);
 				}
 			}
 
 			bool const is_duplicate = (inserted == insert_response::duplicate)
-				|| check_duplicate(ep.address(), recent_reqs4, recent_reqs6);
+				|| check_duplicate(sock.ep.address(), recent_reqs4, recent_reqs6);
 
 			if (is_duplicate) ++incoming_duplicates;
 
@@ -1085,11 +1085,11 @@ struct router_thread
 			b.close_dict();
 			++responses;
 
-			int len = sock.sock.send_to(buffer(response, b.end() - response), ep, 0, ec);
+			int len = sock.sock.send_to(buffer(response, b.end() - response), sock.ep, 0, ec);
 			if (ec)
 				fprintf(stderr, "send_to failed: [cmd: %s dest: %s:%d] (%d) %s\n"
-						, cmd.c_str(), ep.address().to_string().c_str()
-						, ep.port(), ec.value(), ec.message().c_str());
+						, cmd.c_str(), sock.ep.address().to_string().c_str()
+						, sock.ep.port(), ec.value(), ec.message().c_str());
 			else if (len <= 0)
 				fprintf(stderr, "send_to failed: return=%d\n", len);
 		}
@@ -1113,8 +1113,6 @@ struct router_thread
 	// a request from an IP that's already in here, we return fewer nodes
 	ip_set<address_v4> recent_reqs4;
 	ip_set<address_v6> recent_reqs6;
-
-	udp::endpoint ep;
 
 	// we handle one request at a time (per thread), this is the buffer we
 	// build the response in
