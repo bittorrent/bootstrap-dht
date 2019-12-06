@@ -177,11 +177,12 @@ void print_stats(steady_timer& stats_timer, error_code const& ec)
 		}
 		client_histogram.clear();
 	}
-	std::sort(ordered.begin(), ordered.end());
-	char client_dist[200];
+	std::sort(ordered.begin(), ordered.end(), std::greater<>{});
+	char client_dist[250];
 	client_dist[0] = '\0';
 	int len = 0;
 	for (auto i : ordered) {
+		if (len > sizeof(client_dist) - 10) break;
 		len += snprintf(client_dist + len, sizeof(client_dist) - len
 			, "[%c%c: %d] ", (i.second >> 8) & 0xff, i.second & 0xff, i.first);
 	}
