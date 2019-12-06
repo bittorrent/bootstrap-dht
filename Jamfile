@@ -18,11 +18,10 @@ exe dht-bootstrap
 	<threading>multi
 	<include>src
 	<library>boost-system
-	<toolset>gcc:<cxxflags>-std=c++11
-	<toolset>darwin:<cxxflags>-std=c++11
 	: # default build
 	<link>static
 	<threading>multi
+	<cxxstd>14
 	: # usage requirements
 	;
 
@@ -35,11 +34,10 @@ exe dht-torture
 	<threading>multi
 	<include>src
 	<library>boost-system
-	<toolset>gcc:<cxxflags>-std=c++11
-	<toolset>darwin:<cxxflags>-std=c++11
 	: # default build
 	<link>static
 	<threading>multi
+	<cxxstd>14
 	: # usage requirements
 	;
 
