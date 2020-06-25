@@ -48,7 +48,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <cinttypes> // for PRId64
 #include <array>
 
+#if BOOST_VERSION < 106600
 #include <boost/uuid/sha1.hpp>
+#else
+#include <boost/uuid/detail/sha1.hpp>
+#endif
 #include <boost/crc.hpp>
 #include <boost/system/error_code.hpp>
 #include <boost/circular_buffer.hpp>
